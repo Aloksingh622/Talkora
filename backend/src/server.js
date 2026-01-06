@@ -1,34 +1,50 @@
-const http = require('http');
-const app = require('./app');
+const express = require('express');
 const dotenv = require('dotenv');
-const redisclient = require('./database/redis')
-const initializeSocket = require('./socket');
+const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const admin = require('firebase-admin');
-const serviceAccount = require("../ServiceAccount.json")
 
+const redisclient = require('./database/redis');
+const AuthRouter = require('./routes/authRoutes');
+const serviceAccount = require("../ServiceAccount.json");
+
+dotenv.config();
+
+const app = express();
+const PORT = process.env.PORT || 4000;
+
+// Initialize Firebase Admin
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
 
-dotenv.config();
+// Middleware
+app.use(cors({
+  origin: ["http://localhost:5173"],
+  credentials: true
+}));
+app.use(cookieParser());
+app.use(express.json());
 
-const PORT = process.env.PORT || 4000;
+// Routes
+app.use('/api/auth', AuthRouter);
 
-const server = http.createServer(app);
-const io = initializeSocket(server);
+app.get('/', (req, res) => {
+  res.json({ message: 'Discord Clone Backend API is running' });
+});
 
-app.set('io', io);
+
 
 const Initializationconnection = async () => {
   try {
     await Promise.all([redisclient.connect()]);
-    console.log("DB connected")
+    console.log("DB connected");
     app.listen(PORT, () => {
       console.log(" Server running on port", PORT);
     });
   }
   catch (err) {
-    console.log("Error", err)
+    console.log("Error", err);
   }
 }
 
