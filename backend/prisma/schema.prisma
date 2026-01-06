@@ -1,0 +1,26 @@
+generator client {
+  provider        = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  username     String   @unique
+  password     String
+  avatar       String?
+  role         Role     @default(user)
+  firebase_uid String?
+  createdAt    DateTime @default(now())
+
+  @@index([firebase_uid])
+}
+
+enum Role {
+  user
+  admin
+}
