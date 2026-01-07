@@ -245,8 +245,8 @@ let check_user = async (req, res) => {
     const user = req.user;
     let setpassword = req.user.password ? true : false;
     const reply = {
-      Name: user.username,
-      Emailid: user.email,
+      username: user.username,
+      email: user.email,
       id: user.id,
       avatar: user.avatar,
       role: user.role,
@@ -256,12 +256,14 @@ let check_user = async (req, res) => {
     };
 
 
-    res.status(201).json({
+    res.status(200).json({
       user: reply,
       message: "valid user"
     })
   }
   catch (err) {
+    // If it's a known error (like missing token from middleware), send 401
+    // Otherwise 500
     res.status(500).send("Something went wrong -> " + err.message)
   }
 
