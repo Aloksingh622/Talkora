@@ -6,6 +6,8 @@ const validate = require("../validator/validate.js")
 const otp_generator = require("otp-generator")
 const { sendOTPEmail } = require("../emailservice/otp.js")
 const redisclient = require("../database/redis.js")
+const admin = require('firebase-admin');
+
 
 
 
@@ -23,16 +25,34 @@ let email_varification = async (req, res) => {
       specialChars: false,
       digits: true
     })
+    
+    // Store OTP in Redis
     await redisclient.set(`otp:${email}`, otp, {
       EX: 300,
     });
 
+    console.log(`Generated OTP for ${email}: ${otp}`); // For testing - remove in production
 
-    await sendOTPEmail(email, otp);
-    res.send("otp send")
+    // Try to send email
+    try {
+      await sendOTPEmail(email, otp);
+      console.log(`OTP email sent successfully to ${email}`);
+      res.status(200).json({ message: "OTP sent successfully" });
+    } catch (emailError) {
+      console.error("SendGrid Error:", emailError.message);
+      console.error("Full error:", emailError);
+      
+      // Still return success since OTP is stored in Redis
+      // This allows testing without email service
+      res.status(200).json({ 
+        message: "OTP generated (email service unavailable - check console for OTP)",
+        warning: "Email service not configured. Check server console for OTP."
+      });
+    }
   }
   catch (err) {
-    res.status(500).send({ error: err.message || "Something went wrong" });
+    console.error("Email verification error:", err);
+    res.status(500).json({ error: err.message || "Something went wrong" });
   }
 }
 
@@ -43,7 +63,7 @@ let signup = async (req, res) => {
     console.log(req.body)
     validate(req.body);
 
-    const { username, email, password, otp } = req.body;
+    const { username, email, password, otp, displayName, dateOfBirth } = req.body;
 
     const real_otp = await redisclient.get(`otp:${email}`)
     console.log(real_otp)
@@ -69,13 +89,23 @@ let signup = async (req, res) => {
       throw new Error('User already exists with that email or username');
     }
 
+    const userData = {
+      username,
+      email,
+      password: req.body.password,
+      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`,
+    };
+
+    // Add optional fields if provided
+    if (displayName) {
+      userData.displayName = displayName;
+    }
+    if (dateOfBirth) {
+      userData.dateOfBirth = new Date(dateOfBirth);
+    }
+
     const user = await prisma.user.create({
-      data: {
-        username,
-        email,
-        password:req.body.password,
-        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`,
-      },
+      data: userData,
     });
 
     let token = jwt.sign({ id: user.id, email: user.email, name: user.username }, process.env.private_key, { expiresIn: "30d" });
@@ -313,6 +343,84 @@ const social_login = async (req, res) => {
   }
 };
 
+const social_login_only = async (req, res) => {
+  try {
+    const { idToken } = req.body;
+    if (!idToken) {
+      return res.status(401).json({ message: "Id token is not present" });
+    }
+
+    const decoded_token = await admin.auth().verifyIdToken(idToken);
+    const { uid, email, name, picture } = decoded_token;
+
+    // Check if user exists
+    let user = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    // If user doesn't exist, return error
+    if (!user) {
+      return res.status(404).json({ 
+        message: "User not registered. Please sign up first.",
+        error: "USER_NOT_FOUND"
+      });
+    }
+
+    // Update firebase_uid and avatar if not set
+    if (!user.firebase_uid || !user.avatar) {
+      user = await prisma.user.update({
+        where: { email },
+        data: {
+          firebase_uid: user.firebase_uid || uid,
+          avatar: picture || user.avatar,
+        },
+      });
+    }
+
+    const token = jwt.sign(
+      {
+        id: user.id,
+        email: user.email,
+        name: user.username
+      },
+      process.env.private_key,
+      { expiresIn: "30d" }
+    );
+
+    let setpassword = user.password ? true : false;
+
+    const reply = {
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      avatar: user.avatar,
+      role: user.role,
+      createdAt: user.createdAt,
+      setpassword,
+      firebase_uid: user.firebase_uid,
+    };
+    
+    res.cookie("token", token, {
+      sameSite: 'lax',
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+      httpOnly: true,
+      secure: false,
+      overwrite: true
+    });
+
+    res.status(200).json({
+      user: reply,
+      message: "User authenticated successfully"
+    });
+  } catch (error) {
+    console.error("Social login error:", error);
+    if (error.code === 'auth/id-token-expired') {
+      return res.status(401).json({ message: "Token expired. Please log in again." });
+    }
+    res.status(500).json({ message: "An internal server error occurred." });
+  }
+};
+
 
 let admin_register = async (req, res) => {
     try {
@@ -457,6 +565,65 @@ const get_all_user = async (req, res) => {
 }
 
 
+
+const check_username = async (req, res) => {
+  try {
+    const { username } = req.body;
+    
+    // Basic validation
+    if (!username || username.length < 3) {
+      return res.status(400).json({ message: "Username must be at least 3 characters" });
+    }
+
+    // Check exact match
+    const existingUser = await prisma.user.findFirst({
+      where: { username: { equals: username, mode: 'insensitive' } } // Case insensitive check
+    });
+
+    if (!existingUser) {
+      return res.status(200).json({ available: true });
+    }
+
+    // Username is taken, generate suggestions
+    const suggestions = [];
+    const candidates = new Set();
+    
+    // Generate candidates
+    // 1. Append 4 random digits
+    while (candidates.size < 5) {
+      const suffix = Math.floor(1000 + Math.random() * 9000);
+      candidates.add(`${username}${suffix}`);
+    }
+    
+    // 2. Append current year
+    candidates.add(`${username}${new Date().getFullYear()}`);
+
+    // Check which candidates are actually available
+    for (const candidate of candidates) {
+        if (suggestions.length >= 3) break;
+
+        const taken = await prisma.user.findFirst({
+            where: { username: { equals: candidate, mode: 'insensitive' } }
+        });
+
+        if (!taken) {
+            suggestions.push(candidate);
+        }
+    }
+
+    return res.status(200).json({ 
+      available: false, 
+      suggestions,
+      message: "Username is taken" 
+    });
+
+  } catch (err) {
+    console.error("Check username error:", err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+
 const change_role = async (req, res) => {
     const { userId } = req.params;
     const { role: newRole } = req.body;
@@ -522,6 +689,8 @@ module.exports = {
   login,
   logout,
   social_login,
+  social_login_only,
+  check_username,
   delete_profile,
   check_user,
   change_pass,

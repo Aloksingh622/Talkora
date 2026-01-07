@@ -13,12 +13,48 @@ export const user_register = createAsyncThunk(
     }
 );
 
+export const send_otp = createAsyncThunk(
+    "auth/sendOtp",
+    async (email, { rejectWithValue }) => {
+        try {
+            const response = await axios_Client.post("/api/auth/emailVerification", { email });
+            return response.data;
+        } catch (err) {
+            return rejectWithValue(err.response?.data || err.message);
+        }
+    }
+);
+
 export const social_login_thunk = createAsyncThunk(
     "auth/socialLogin",
     async (idToken, { rejectWithValue }) => {
         try {
             const response = await axios_Client.post("/api/auth/socialLogin", { idToken });
             return response.data.user;
+        } catch (err) {
+            return rejectWithValue(err.response?.data || err.message);
+        }
+    }
+);
+
+export const social_login_only_thunk = createAsyncThunk(
+    "auth/socialLoginOnly",
+    async (idToken, { rejectWithValue }) => {
+        try {
+            const response = await axios_Client.post("/api/auth/socialLoginOnly", { idToken });
+            return response.data.user;
+        } catch (err) {
+            return rejectWithValue(err.response?.data || err.message);
+        }
+    }
+);
+
+export const check_username_availability = createAsyncThunk(
+    "auth/checkUsername",
+    async (username, { rejectWithValue }) => {
+        try {
+            const response = await axios_Client.post("/api/auth/check-username", { username });
+            return response.data;
         } catch (err) {
             return rejectWithValue(err.response?.data || err.message);
         }
@@ -84,7 +120,17 @@ const auth_slice = createSlice({
         is_authenticated: false,
         loading: false,
         error: null,
-        isCheckingAuth: true, 
+        isCheckingAuth: true,
+        otpSent: false,
+        otpLoading: false,
+        otpError: null,
+        // Username check state
+        usernameAvailability: {
+            available: null, // null, true, false
+            checking: false,
+            suggestions: [],
+            message: ''
+        }
     },
     reducers: {},
     extraReducers: (builder) => {
@@ -164,6 +210,58 @@ const auth_slice = createSlice({
                 state.loading = false;
                 state.error = action.payload?.message || 'Social login failed';
                 state.is_authenticated = false;
+            })
+
+            // social_login_only (for login page)
+            .addCase(social_login_only_thunk.pending, (state) => {
+                state.loading = true;
+                state.error = null;
+            })
+            .addCase(social_login_only_thunk.fulfilled, (state, action) => {
+                state.loading = false;
+                state.is_authenticated = !!action.payload;
+                state.user = action.payload;
+            })
+            .addCase(social_login_only_thunk.rejected, (state, action) => {
+                state.loading = false;
+                state.error = action.payload?.message || 'Social login failed';
+                state.is_authenticated = false;
+            })
+
+            // send OTP
+            .addCase(send_otp.pending, (state) => {
+                state.otpLoading = true;
+                state.otpError = null;
+                state.otpSent = false;
+            })
+            .addCase(send_otp.fulfilled, (state) => {
+                state.otpLoading = false;
+                state.otpSent = true;
+                state.otpError = null;
+            })
+            .addCase(send_otp.rejected, (state, action) => {
+                state.otpLoading = false;
+                state.otpSent = false;
+                state.otpError = action.payload?.message || 'Failed to send OTP';
+            })
+
+            // check username
+            .addCase(check_username_availability.pending, (state) => {
+                state.usernameAvailability.checking = true;
+                state.usernameAvailability.available = null;
+                state.usernameAvailability.message = '';
+                state.usernameAvailability.suggestions = [];
+            })
+            .addCase(check_username_availability.fulfilled, (state, action) => {
+                state.usernameAvailability.checking = false;
+                state.usernameAvailability.available = action.payload.available;
+                state.usernameAvailability.suggestions = action.payload.suggestions || [];
+                state.usernameAvailability.message = action.payload.message || '';
+            })
+            .addCase(check_username_availability.rejected, (state, action) => {
+                state.usernameAvailability.checking = false;
+                state.usernameAvailability.available = null;
+                state.usernameAvailability.message = action.payload?.message || "Error checking username";
             })
 
             // delete profile

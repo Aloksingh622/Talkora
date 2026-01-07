@@ -6,7 +6,7 @@ const admin = require('firebase-admin');
 
 const redisclient = require('./database/redis');
 const AuthRouter = require('./routes/authRoutes');
-const serviceAccount = require("../ServiceAccount.json");
+const serviceAccount = require("./serviceAccount.json");
 
 dotenv.config();
 

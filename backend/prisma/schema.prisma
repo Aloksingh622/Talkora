@@ -9,14 +9,16 @@ datasource db {
 }
 
 model User {
-  id           Int      @id @default(autoincrement())
-  email        String   @unique
-  username     String   @unique
+  id           Int       @id @default(autoincrement())
+  email        String    @unique
+  username     String    @unique
+  displayName  String?
   password     String
+  dateOfBirth  DateTime?
   avatar       String?
-  role         Role     @default(user)
+  role         Role      @default(user)
   firebase_uid String?
-  createdAt    DateTime @default(now())
+  createdAt    DateTime  @default(now())
 
   @@index([firebase_uid])
 }
