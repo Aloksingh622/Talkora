@@ -10,4 +10,8 @@ export default {
     plugins: [
         require('daisyui'),
     ],
+    darkMode: 'class',
+    daisyui: {
+        themes: ["light", "black"], // pure black theme
+    },
 }

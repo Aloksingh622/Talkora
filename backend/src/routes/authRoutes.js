@@ -8,6 +8,8 @@ const {
     login,
     logout,
     social_login,
+    social_login_only,
+    check_username,
     delete_profile,
     check_user,
     change_pass,
@@ -23,6 +25,8 @@ AuthRouter.post("/register", signup)
 AuthRouter.post("/login", login)
 AuthRouter.post("/logout", usermiddleware, logout)
 AuthRouter.post("/socialLogin", social_login)
+AuthRouter.post("/socialLoginOnly", social_login_only)
+AuthRouter.post("/check-username", check_username)
 AuthRouter.delete("/deleteProfile", usermiddleware, delete_profile)
 AuthRouter.get("/check", usermiddleware, check_user)
 AuthRouter.put("/change-password", usermiddleware, change_pass)

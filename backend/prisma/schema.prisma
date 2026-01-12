@@ -1,5 +1,6 @@
 generator client {
   provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
 }
 
 datasource db {
@@ -7,20 +8,92 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Role {
+  user
+  admin
+}
+
+enum ServerRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum ServerType {
+  FRIENDS
+  COMMUNITY
+}
+
+enum ChannelType {
+  TEXT
+}
+
 model User {
-  id           Int      @id @default(autoincrement())
-  email        String   @unique
-  username     String   @unique
+  id           Int       @id @default(autoincrement())
+  email        String    @unique
+  username     String    @unique
+  displayName  String?
   password     String
+  dateOfBirth  DateTime?
   avatar       String?
-  role         Role     @default(user)
+  role         Role      @default(user)
   firebase_uid String?
-  createdAt    DateTime @default(now())
+  createdAt    DateTime  @default(now())
+
+  ownedServers Server[]
+  memberships  ServerMember[]
+  messages     Message[]
 
   @@index([firebase_uid])
 }
 
-enum Role {
-  user
-  admin
+model Server {
+  id        Int         @id @default(autoincrement())
+  name      String
+  icon      String?
+  type      ServerType? @default(FRIENDS)
+  ownerId   Int
+  owner     User        @relation(fields: [ownerId], references: [id])
+  createdAt DateTime    @default(now())
+
+  members   ServerMember[]
+  channels  Channel[]
+}
+
+model Channel {
+  id        Int         @id @default(autoincrement())
+  name      String
+  type      ChannelType @default(TEXT)
+  serverId  Int
+  createdAt DateTime    @default(now())
+
+  server    Server      @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  messages  Message[]
+
+  @@unique([serverId, name])
+}
+
+model Message {
+  id        Int      @id @default(autoincrement())
+  content   String
+  userId    Int
+  channelId Int
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id])
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@index([channelId, createdAt])
+}
+
+model ServerMember {
+  id       Int        @id @default(autoincrement())
+  userId   Int
+  serverId Int
+  role     ServerRole
+
+  user   User   @relation(fields: [userId], references: [id])
+  server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, serverId])
 }
