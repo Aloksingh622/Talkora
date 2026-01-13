@@ -55,6 +55,7 @@ model Server {
   ownerId   Int
   owner     User        @relation(fields: [ownerId], references: [id])
   createdAt DateTime    @default(now())
+  terms     String?
 
   members   ServerMember[]
   channels  Channel[]
@@ -91,6 +92,7 @@ model ServerMember {
   userId   Int
   serverId Int
   role     ServerRole
+  tocAccepted Boolean @default(false)
 
   user   User   @relation(fields: [userId], references: [id])
   server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)

@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { getMessages, sendMessageREST } from '../services/messageService';
 import { getSocket } from '../utils/socket';
 import { getUserPresence } from '../services/presenceService';
+import { enhanceMessage } from '../services/aiService';
 import { useSelector } from 'react-redux';
 import OnlineIndicator from './OnlineIndicator';
 
@@ -10,6 +11,8 @@ const ChatArea = ({ channelId, channelName }) => {
     const [input, setInput] = useState('');
     const [typingUser, setTypingUser] = useState(null);
     const [userPresence, setUserPresence] = useState({}); // {userId: {online: bool, lastSeen: timestamp}}
+    const [isEnhancing, setIsEnhancing] = useState(false);
+    const [originalInput, setOriginalInput] = useState('');
     const messagesEndRef = useRef(null);
     const socket = getSocket();
     const currentUser = useSelector(state => state.auth.user);
@@ -215,6 +218,28 @@ const ChatArea = ({ channelId, channelName }) => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     };
 
+    const handleEnhance = async () => {
+        if (!input.trim() || isEnhancing) return;
+
+        setOriginalInput(input);
+        setIsEnhancing(true);
+
+        try {
+            const enhancedText = await enhanceMessage(input);
+            setInput(enhancedText);
+        } catch (error) {
+            console.error("Failed to enhance message", error);
+            alert("Failed to enhance message");
+        } finally {
+            setIsEnhancing(false);
+        }
+    };
+
+    const handleUndo = () => {
+        setInput(originalInput);
+        setOriginalInput('');
+    };
+
     if (!channelId) {
         return (
             <div className="flex-1 bg-white dark:bg-black flex items-center justify-center text-gray-500 dark:text-gray-400">
@@ -297,6 +322,43 @@ const ChatArea = ({ channelId, channelName }) => {
                             handleTyping();
                         }}
                     />
+
+                    {/* Undo Button */}
+                    {originalInput && input !== originalInput && (
+                        <button
+                            type="button"
+                            onClick={handleUndo}
+                            className="p-2 text-gray-500 hover:text-red-500 transition-colors"
+                            title="Undo Enhancement"
+                        >
+                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                            </svg>
+                        </button>
+                    )}
+
+                    {/* Enhance Button */}
+                    <button
+                        type="button"
+                        onClick={handleEnhance}
+                        disabled={!input.trim() || isEnhancing}
+                        className={`p-2 ml-1 rounded-full transition-colors ${isEnhancing
+                            ? 'text-indigo-400 animate-pulse cursor-wait'
+                            : 'text-gray-400 hover:text-indigo-500'
+                            }`}
+                        title="AI Enhance"
+                    >
+                        {isEnhancing ? (
+                            <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                        ) : (
+                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                            </svg>
+                        )}
+                    </button>
                 </form>
             </div>
         </div>

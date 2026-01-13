@@ -52,6 +52,15 @@ const ServerSidebar = ({ onServerSelect, selectedServerId, servers = [], onServe
                 </svg>
             </div>
 
+            <div
+                className="w-12 h-12 rounded-full bg-indigo-500 flex items-center justify-center text-white cursor-pointer hover:rounded-xl transition-all duration-200"
+                onClick={() => navigate('/channels/@me')}
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-7 w-7" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+                </svg>
+            </div>
+
             <div className="w-8 h-[2px] bg-gray-300 dark:bg-gray-800 rounded-full"></div>
 
             {/* Server List */}
@@ -80,6 +89,7 @@ const ServerSidebar = ({ onServerSelect, selectedServerId, servers = [], onServe
             ))}
 
             {/* Add Server Button */}
+
             <div
                 className="w-12 h-12 rounded-full bg-white dark:bg-gray-800 flex items-center justify-center text-green-500 cursor-pointer hover:rounded-xl hover:bg-green-500 hover:text-white transition-all duration-200 group relative"
                 onClick={() => setActiveModal('create')}

@@ -6,13 +6,13 @@ module.exports.sendOTPEmail = async function (to, otp) {
   const msg = {
     to,
     from: "paarthoceaniq25040@gmail.com",
-    subject: "Talkora Verification Code",
+    subject: "SparkHub Verification Code",
     html: `
       <!DOCTYPE html>
       <html>
       <head>
         <meta charset="utf-8">
-        <title>Talkora Verification</title>
+        <title>SparkHub Verification</title>
         <style>
           body { margin: 0; padding: 0; font-family: 'gg sans', 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #2b2d31; color: #dbdee1; }
           .container { max-width: 480px; margin: 40px auto; background: #313338; border-radius: 5px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
@@ -40,7 +40,7 @@ module.exports.sendOTPEmail = async function (to, otp) {
       <body>
         <div class="container">
           <div class="header">
-            <h1>Talkora</h1>
+            <h1>SparkHub</h1>
           </div>
           <div class="content">
             <h2 class="welcome-text">Hello!</h2>
@@ -59,7 +59,7 @@ module.exports.sendOTPEmail = async function (to, otp) {
             </div>
           </div>
           <div class="footer">
-            <p>&copy; ${new Date().getFullYear()} Talkora. All rights reserved.</p>
+            <p>&copy; ${new Date().getFullYear()} SparkHub. All rights reserved.</p>
           </div>
         </div>
       </body>
