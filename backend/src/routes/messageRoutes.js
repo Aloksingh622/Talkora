@@ -1,17 +1,17 @@
 const express = require('express');
 const MessageRouter = express.Router();
 const usermiddleware = require('../middlewares/Auth.js');
+const upload = require('../middlewares/multer.middleware.js');
 const {
     sendMessage,
     getMessages,
+    editMessage,
+    deleteMessage,
 } = require('../controllers/messageController.js');
 
-// Nested routes pattern is preferred by user request: /channels/:channelId/messages
-// But since we are mounting at /api/messages or similar, let's see server.js
-// If we mount at /api, then we define the full path here.
-// Or we can simple mount at /api and have paths start with /channels/...
-
-MessageRouter.post('/channels/:channelId/messages', usermiddleware, sendMessage);
+MessageRouter.post('/channels/:channelId/messages', usermiddleware, upload.single('file'), sendMessage);
 MessageRouter.get('/channels/:channelId/messages', usermiddleware, getMessages);
+MessageRouter.patch('/channels/:channelId/messages/:messageId', usermiddleware, editMessage);
+MessageRouter.delete('/channels/:channelId/messages/:messageId', usermiddleware, deleteMessage);
 
 module.exports = MessageRouter;

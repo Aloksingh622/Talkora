@@ -22,6 +22,10 @@ enum ServerRole {
 enum ServerType {
   FRIENDS
   COMMUNITY
+  GAMING
+  SCHOOL
+  STUDY
+  ART
 }
 
 enum ChannelType {
@@ -43,21 +47,46 @@ model User {
   ownedServers Server[]
   memberships  ServerMember[]
   messages     Message[]
+  requests     JoinRequest[]
+
+  // Member management relations
+  bans               Ban[]      @relation("BannedUser")
+  bansIssued         Ban[]      @relation("BannedBy")
+  timeouts           Timeout[]  @relation("TimedOutUser")
+  timeoutsIssued     Timeout[]  @relation("TimedOutBy")
+  auditLogsPerformed AuditLog[] @relation("AuditPerformedBy")
+  auditLogsTargeted  AuditLog[] @relation("AuditTarget")
+
+  // DM and friendship relations
+  friendRequestsSent     Friendship[]           @relation("FriendRequester")
+  friendRequestsReceived Friendship[]           @relation("FriendAddressee")
+  dmChannelsAsUser1      DirectMessageChannel[] @relation("DMUser1")
+  dmChannelsAsUser2      DirectMessageChannel[] @relation("DMUser2")
+  directMessages         DirectMessage[]
 
   @@index([firebase_uid])
 }
 
 model Server {
-  id        Int         @id @default(autoincrement())
-  name      String
-  icon      String?
-  type      ServerType? @default(FRIENDS)
-  ownerId   Int
-  owner     User        @relation(fields: [ownerId], references: [id])
-  createdAt DateTime    @default(now())
+  id         Int         @id @default(autoincrement())
+  name       String
+  icon       String?
+  type       ServerType? @default(FRIENDS)
+  isPrivate  Boolean     @default(false)
+  inviteCode String?     @unique
+  ownerId    Int
+  owner      User        @relation(fields: [ownerId], references: [id])
+  createdAt  DateTime    @default(now())
 
-  members   ServerMember[]
-  channels  Channel[]
+  members      ServerMember[]
+  channels     Channel[]
+  joinRequests JoinRequest[]
+
+  // Member management relations
+  bans      Ban[]
+  timeouts  Timeout[]
+  roles     ServerRole2[]
+  auditLogs AuditLog[]
 }
 
 model Channel {
@@ -67,18 +96,22 @@ model Channel {
   serverId  Int
   createdAt DateTime    @default(now())
 
-  server    Server      @relation(fields: [serverId], references: [id], onDelete: Cascade)
-  messages  Message[]
+  server   Server    @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  messages Message[]
 
   @@unique([serverId, name])
 }
 
 model Message {
-  id        Int      @id @default(autoincrement())
-  content   String
+  id        Int       @id @default(autoincrement())
+  content   String?
+  fileUrl   String?
+  fileType  String? // IMAGE, VIDEO, PDF, RAW
+  fileName  String?
   userId    Int
   channelId Int
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
+  editedAt  DateTime?
 
   user    User    @relation(fields: [userId], references: [id])
   channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
@@ -96,4 +129,147 @@ model ServerMember {
   server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
 
   @@unique([userId, serverId])
+}
+
+model JoinRequest {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  serverId  Int
+  status    String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id])
+  server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, serverId])
+}
+
+// Ban model - Track permanently banned users
+model Ban {
+  id       Int      @id @default(autoincrement())
+  userId   Int
+  serverId Int
+  reason   String?
+  bannedAt DateTime @default(now())
+  bannedBy Int // Owner who banned
+
+  user         User   @relation("BannedUser", fields: [userId], references: [id])
+  bannedByUser User   @relation("BannedBy", fields: [bannedBy], references: [id])
+  server       Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, serverId])
+  @@index([serverId])
+}
+
+// Timeout model - Temporary message restrictions
+model Timeout {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  serverId   Int
+  expiresAt  DateTime
+  reason     String?
+  timedOutBy Int // Owner who applied timeout
+  createdAt  DateTime @default(now())
+
+  user           User   @relation("TimedOutUser", fields: [userId], references: [id])
+  timedOutByUser User   @relation("TimedOutBy", fields: [timedOutBy], references: [id])
+  server         Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, serverId])
+  @@index([serverId, expiresAt])
+}
+
+// ServerRole2 model - Custom server roles (future feature)
+model ServerRole2 {
+  id          Int      @id @default(autoincrement())
+  name        String
+  serverId    Int
+  color       String? // Hex color
+  permissions String[] // Array of permission strings
+  position    Int      @default(0) // Role hierarchy
+  createdAt   DateTime @default(now())
+
+  server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@unique([serverId, name])
+  @@index([serverId])
+}
+
+// AuditLog model - Track all owner actions
+model AuditLog {
+  id           Int      @id @default(autoincrement())
+  serverId     Int
+  action       String // KICK, BAN, TIMEOUT, ROLE_ASSIGN, etc.
+  performedBy  Int
+  targetUserId Int?
+  details      String? // JSON string with action details
+  createdAt    DateTime @default(now())
+
+  server          Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  performedByUser User   @relation("AuditPerformedBy", fields: [performedBy], references: [id])
+  targetUser      User?  @relation("AuditTarget", fields: [targetUserId], references: [id])
+
+  @@index([serverId, createdAt])
+}
+
+// Friendship model - Friend requests and relationships
+enum FriendshipStatus {
+  PENDING
+  ACCEPTED
+  BLOCKED
+}
+
+model Friendship {
+  id          Int              @id @default(autoincrement())
+  requesterId Int // User who sent request
+  addresseeId Int // User who received request
+  status      FriendshipStatus @default(PENDING)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  requester User @relation("FriendRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  addressee User @relation("FriendAddressee", fields: [addresseeId], references: [id], onDelete: Cascade)
+
+  @@unique([requesterId, addresseeId])
+  @@index([requesterId, status])
+  @@index([addresseeId, status])
+  @@index([requesterId, addresseeId])
+}
+
+// DirectMessageChannel model - DM conversations between two users
+model DirectMessageChannel {
+  id        Int      @id @default(autoincrement())
+  user1Id   Int
+  user2Id   Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user1    User            @relation("DMUser1", fields: [user1Id], references: [id], onDelete: Cascade)
+  user2    User            @relation("DMUser2", fields: [user2Id], references: [id], onDelete: Cascade)
+  messages DirectMessage[]
+
+  @@unique([user1Id, user2Id])
+  @@index([user1Id])
+  @@index([user2Id])
+}
+
+// DirectMessage model - Individual DM messages
+model DirectMessage {
+  id        Int       @id @default(autoincrement())
+  content   String?
+  fileUrl   String?
+  fileType  String? // IMAGE, VIDEO, PDF, RAW
+  fileName  String?
+  senderId  Int
+  channelId Int
+  isRead    Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  editedAt  DateTime?
+
+  sender  User                 @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  channel DirectMessageChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@index([channelId, createdAt])
+  @@index([senderId])
+  @@index([channelId, isRead])
 }

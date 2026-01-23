@@ -36,6 +36,10 @@ const MessageRouter = require('./routes/messageRoutes');
 app.use('/api', MessageRouter); // Mount at /api so routes are /api/channels/:id/messages
 const PresenceRouter = require('./routes/presenceRoutes');
 app.use('/api', PresenceRouter); // Mount at /api so routes are /api/users/:id/presence
+const FriendRouter = require('./routes/friendRoutes');
+app.use('/api/friends', FriendRouter);
+const DMRouter = require('./routes/dmRoutes');
+app.use('/api/dm', DMRouter);
 
 app.get('/', (req, res) => {
   res.json({ message: 'Discord Clone Backend API is running' });

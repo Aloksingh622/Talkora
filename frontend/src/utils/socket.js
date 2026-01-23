@@ -1,6 +1,6 @@
 import { io } from "socket.io-client";
 
-// Singleton socket instance
+
 let socket;
 
 export const initSocket = (token) => {

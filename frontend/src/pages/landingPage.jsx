@@ -1,369 +1,352 @@
-import React, { useState } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { motion, useScroll, useTransform } from 'framer-motion';
-import heroImage from '../assets/hero.png';
-import ThemeToggle from '../components/ThemeToggle';
+import { useSelector } from 'react-redux';
+import { motion, useScroll, useTransform, useSpring, useMotionValueEvent } from 'framer-motion';
+import { ChevronRight, Sparkles, Zap, Users, Globe, MessageCircle } from 'lucide-react';
+import mainLogo from '../assets/logo.png';
+import sparkHubLogo from '../assets/sparkhub.png';
+
+// Asset Imports
+const frameModules = import.meta.glob('../assets/frames/*.jpg', { eager: true, import: 'default' });
+
+const frameUrls = Object.keys(frameModules)
+  .sort((a, b) => {
+    const numA = parseInt(a.match(/(\d+)/)?.[0] || "0");
+    const numB = parseInt(b.match(/(\d+)/)?.[0] || "0");
+    return numA - numB;
+  })
+  .map(key => frameModules[key]);
 
 const LandingPage = () => {
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const { scrollYProgress } = useScroll();
-  
-  // Parallax effects
-  const y = useTransform(scrollYProgress, [0, 1], ['0%', '50%']);
-  const opacity = useTransform(scrollYProgress, [0, 0.5], [1, 0]);
+  const canvasRef = useRef(null);
+  const scrollContainerRef = useRef(null);
+  const [images, setImages] = useState([]);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [windowSize, setWindowSize] = useState({ width: 0, height: 0 });
+  const { is_authenticated } = useSelector((state) => state.auth);
+
+  // Scroll Progress
+  const { scrollYProgress } = useScroll({
+    target: scrollContainerRef,
+    offset: ["start start", "end end"],
+  });
+
+  const smoothProgress = useSpring(scrollYProgress, {
+    stiffness: 200,
+    damping: 30,
+    restDelta: 0.001
+  });
+
+  // Preload images
+  useEffect(() => {
+    if (frameUrls.length === 0) return;
+
+    let loadedCount = 0;
+    const total = frameUrls.length;
+    const loadedImages = new Array(total);
+
+    frameUrls.forEach((url, index) => {
+      const img = new Image();
+      img.src = url;
+      img.onload = () => {
+        loadedImages[index] = img;
+        loadedCount++;
+        if (loadedCount === total) {
+          setImages(loadedImages);
+          setIsLoaded(true);
+        }
+      };
+      img.onerror = () => {
+        loadedCount++;
+        if (loadedCount === total) {
+          setImages(loadedImages);
+          setIsLoaded(true);
+        }
+      };
+    });
+  }, []);
+
+  // Resize handler
+  useEffect(() => {
+    const handleResize = () => {
+      setWindowSize({ width: window.innerWidth, height: window.innerHeight });
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Canvas Logic
+  const renderFrame = (index) => {
+    const canvas = canvasRef.current;
+    if (!canvas || !images[index]) return;
+
+    const ctx = canvas.getContext('2d');
+    const img = images[index];
+
+    canvas.width = windowSize.width;
+    canvas.height = windowSize.height;
+
+    const imgAspect = img.width / img.height;
+    const canvasAspect = canvas.width / canvas.height;
+
+    let drawW, drawH, startX, startY;
+
+    if (canvasAspect > imgAspect) {
+      drawW = canvas.width;
+      drawH = canvas.width / imgAspect;
+      startX = 0;
+      startY = (canvas.height - drawH) / 2;
+    } else {
+      drawW = canvas.height * imgAspect;
+      drawH = canvas.height;
+      startX = (canvas.width - drawW) / 2;
+      startY = 0;
+    }
+
+    ctx.fillStyle = "#050510";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, startX, startY, drawW, drawH);
+  };
+
+  useMotionValueEvent(smoothProgress, "change", (latest) => {
+    if (!isLoaded || images.length === 0) return;
+    const frameIndex = Math.min(
+      Math.max(Math.floor(latest * (images.length - 1)), 0),
+      images.length - 1
+    );
+    requestAnimationFrame(() => renderFrame(frameIndex));
+  });
+
+  useEffect(() => {
+    if (isLoaded && images.length > 0) renderFrame(0);
+  }, [isLoaded, windowSize]);
 
   return (
-    <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-white font-sans overflow-x-hidden transition-colors duration-300">
-      {/* Animated Background Gradient */}
-      <div className="fixed inset-0 -z-10 overflow-hidden">
-        <motion.div
-          className="absolute top-0 -left-1/4 w-96 h-96 bg-purple-500/20 dark:bg-purple-500/30 rounded-full blur-3xl"
-          animate={{
-            scale: [1, 1.2, 1],
-            x: [0, 100, 0],
-            y: [0, 50, 0],
-          }}
-          transition={{
-            duration: 20,
-            repeat: Infinity,
-            ease: "easeInOut"
-          }}
-        />
-        <motion.div
-          className="absolute bottom-0 -right-1/4 w-96 h-96 bg-indigo-500/20 dark:bg-indigo-500/30 rounded-full blur-3xl"
-          animate={{
-            scale: [1, 1.3, 1],
-            x: [0, -100, 0],
-            y: [0, -50, 0],
-          }}
-          transition={{
-            duration: 25,
-            repeat: Infinity,
-            ease: "easeInOut"
-          }}
-        />
+    <div className="bg-[#050510] text-white font-sans">
+      {/* Fixed Navbar (Glass) */}
+      <nav className="fixed top-0 left-0 right-0 z-50 flex justify-between items-center px-6 py-4 md:px-12 md:py-6 bg-[#050510]/10 backdrop-blur-md border-b border-white/5">
+        <div className="flex items-center gap-3">
+          <img src={mainLogo} alt="Logo" className="w-8 h-8" />
+          <img src={sparkHubLogo} alt="SparkHub" className="h-10 w-auto object-contain" />
+        </div>
+        <div className="hidden md:flex items-center gap-8 text-sm font-medium text-gray-300">
+          <a href="#" className="hover:text-white transition-colors">Overview</a>
+          <a href="#" className="hover:text-white transition-colors">Community</a>
+          <a href="#" className="hover:text-white transition-colors">Voice</a>
+          <a href="#" className="hover:text-white transition-colors">Features</a>
+        </div>
+        {is_authenticated ? (
+          <Link to="/channels" className="group relative px-6 py-2.5 rounded-full bg-black hover:bg-gray-900 transition-all border border-[#B76E79]/50 shadow-[0_0_15px_rgba(225,29,72,0.4)]">
+            <span className="relative z-10 text-sm font-bold flex items-center gap-2 text-rose-300">
+              Open SparkHub <MessageCircle className="w-4 h-4 group-hover:scale-110 transition-transform" />
+            </span>
+          </Link>
+        ) : (
+          <Link to="/login" className="group relative px-6 py-2.5 rounded-full bg-black hover:bg-gray-900 transition-all border border-[#B76E79]/50 shadow-[0_0_15px_rgba(225,29,72,0.4)]">
+            <span className="relative z-10 text-sm text-rose-300 font-semibold flex items-center gap-2">
+              Create your space <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+            </span>
+          </Link>
+        )}
+      </nav>
+
+      {/* === SCROLL CONTAINER === */}
+      <div ref={scrollContainerRef} className="relative w-full" style={{ height: '400vh' }}>
+        {/* 1. STICKY BACKGROUND (Layer 0) */}
+        <div className="sticky top-0 left-0 w-full h-screen z-0">
+          <canvas ref={canvasRef} className="w-full h-full block" />
+          {/* Dark Overlay "Curtain" for Readability */}
+          <div className="absolute inset-0 z-10 bg-black/60 pointer-events-none" />
+
+          {!isLoaded && (
+            <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-[#050510]">
+              <div className="w-64 h-1 bg-gray-800 rounded-full overflow-hidden">
+                <motion.div
+                  className="h-full bg-purple-500"
+                  animate={{ width: ["0%", "100%"] }}
+                  transition={{ duration: 2, repeat: Infinity }}
+                />
+              </div>
+              <p className="mt-4 text-purple-400 font-mono text-xs tracking-widest uppercase">Initializing SparkHub...</p>
+            </div>
+          )}
+        </div>
+
+        {/* 2. SCROLLING STORIES (Layer 10) */}
+        <div className="absolute top-0 left-0 w-full h-full z-10">
+          {/* ACT 1: Intro (0-100vh) */}
+          <section className="h-screen flex flex-col items-center justify-center p-6 text-center">
+            <motion.div
+              initial={{ opacity: 0, y: 50 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: false, amount: 0.5 }}
+              transition={{ duration: 0.8 }}
+            >
+              <div className="mb-8">
+                <img
+                  src={sparkHubLogo}
+                  alt="SparkHub"
+                  className="w-full max-w-4xl mx-auto h-auto object-contain drop-shadow-[0_0_50px_rgba(255,255,255,0.2)]"
+                />
+              </div>
+              <p className="text-xl md:text-2xl text-gray-400 font-light tracking-wide max-w-2xl mx-auto">
+                Where communities begin.
+              </p>
+              <motion.div
+                animate={{ y: [0, 10, 0], opacity: [0.5, 1, 0.5] }}
+                transition={{ duration: 2, repeat: Infinity }}
+                className="mt-12"
+              >
+                <span className="text-xs text-rose-500 uppercase tracking-[0.2em]">Scroll to Explore</span>
+              </motion.div>
+            </motion.div>
+          </section>
+
+          {/* ACT 2: Spark (100-200vh) */}
+          <section className="h-screen flex flex-col items-center justify-center p-6 text-center">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              whileInView={{ opacity: 1, scale: 1 }}
+              viewport={{ once: false, amount: 0.5 }}
+              transition={{ duration: 0.8 }}
+            >
+              <Sparkles className="w-16 h-16 text-rose-400 mb-8 mx-auto drop-shadow-[0_0_20px_rgba(251,113,133,0.5)]" />
+              <h2 className="text-4xl md:text-6xl font-bold leading-tight max-w-4xl mx-auto text-white">
+                “Every connection starts with a <span className="text-rose-400">spark</span>.”
+              </h2>
+            </motion.div>
+          </section>
+
+          {/* ACT 3: Connection (200-300vh) */}
+          <section className="h-screen flex items-center justify-start p-6 md:pl-20 lg:pl-40">
+            <motion.div
+              className="max-w-xl text-left"
+              initial={{ opacity: 0, x: -50 }}
+              whileInView={{ opacity: 1, x: 0 }}
+              viewport={{ once: false, amount: 0.5 }}
+              transition={{ duration: 0.8 }}
+            >
+              <div className="flex items-center gap-4 mb-8">
+                <div className="p-3 rounded-2xl bg-white/10 backdrop-blur-sm border border-white/20">
+                  <MessageCircle className="w-8 h-8 text-rose-300" />
+                </div>
+                <div className="p-3 rounded-2xl bg-white/10 backdrop-blur-sm border border-white/20">
+                  <Zap className="w-8 h-8 text-white" />
+                </div>
+              </div>
+              <h2 className="text-5xl md:text-7xl font-bold mb-4 text-white">Instant Chat.</h2>
+              <h2 className="text-5xl md:text-7xl font-bold text-rose-300/80 mb-8">Real-time Voice.</h2>
+              <p className="text-lg text-gray-400 leading-relaxed">
+                Experience zero-latency communication designed for the modern web.
+              </p>
+            </motion.div>
+          </section>
+
+          {/* ACT 4: Community (300-400vh) */}
+          <section className="h-screen flex items-center justify-end p-6 md:pr-20 lg:pr-40">
+            <motion.div
+              className="max-w-xl text-right"
+              initial={{ opacity: 0, x: 50 }}
+              whileInView={{ opacity: 1, x: 0 }}
+              viewport={{ once: false, amount: 0.5 }}
+              transition={{ duration: 0.8 }}
+            >
+              <div className="flex justify-end mb-8">
+                <div className="p-4 rounded-full bg-rose-500/10 border border-rose-500/20">
+                  <Users className="w-12 h-12 text-rose-400" />
+                </div>
+              </div>
+              <h2 className="text-4xl md:text-6xl font-bold mb-6 leading-tight text-white">
+                Build communities<br />that feel <span className="text-rose-400 italic">alive</span>.
+              </h2>
+              <p className="text-xl text-gray-400">
+                Moderation tools, custom roles, and diverse channels at your fingertips.
+              </p>
+            </motion.div>
+          </section>
+        </div>
       </div>
 
-      {/* Navbar */}
-      <motion.nav 
-        initial={{ y: -100 }}
-        animate={{ y: 0 }}
-        transition={{ duration: 0.6, ease: "easeOut" }}
-        className="relative flex justify-between items-center px-6 py-6 max-w-7xl mx-auto z-50 backdrop-blur-sm"
-      >
-        <motion.div 
-          className="flex items-center gap-2"
-          whileHover={{ scale: 1.05 }}
-          transition={{ type: "spring", stiffness: 400 }}
-        >
-          <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center shadow-lg shadow-indigo-500/50">
-             <span className="font-bold text-white">T</span>
-          </div>
-          <span className="text-2xl font-bold tracking-wide bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400 bg-clip-text text-transparent">Talkora</span>
-        </motion.div>
-        
-        {/* Desktop Menu */}
-        <div className="hidden md:flex gap-8 font-semibold text-gray-700 dark:text-gray-300 items-center">
-          {['Download', 'Nitro', 'Discover', 'Safety'].map((item, i) => (
-            <motion.a
-              key={item}
-              href="#"
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.1 + 0.3 }}
-              whileHover={{ scale: 1.1, color: '#6366f1' }}
-              className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
-            >
-              {item}
-            </motion.a>
-          ))}
-        </div>
-
-        {/* Auth Buttons & Theme Toggle */}
-        <div className="flex items-center gap-4">
-           <div className="hidden md:block">
-             <ThemeToggle />
-           </div>
-
-           <motion.div
-             initial={{ opacity: 0, scale: 0.8 }}
-             animate={{ opacity: 1, scale: 1 }}
-             transition={{ delay: 0.5 }}
-           >
-             <Link 
-               to="/login" 
-               className="hidden sm:block px-5 py-2 rounded-full bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-white font-medium hover:bg-gray-300 dark:hover:bg-gray-700 transition-all shadow-sm hover:shadow-md"
-             >
-               Login
-             </Link>
-           </motion.div>
-           
-           <motion.div
-             initial={{ opacity: 0, scale: 0.8 }}
-             animate={{ opacity: 1, scale: 1 }}
-             transition={{ delay: 0.6 }}
-             whileHover={{ scale: 1.05 }}
-             whileTap={{ scale: 0.95 }}
-           >
-             <Link 
-               to="/signup" 
-               className="hidden sm:block px-5 py-2 rounded-full bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-medium hover:from-indigo-600 hover:to-purple-700 transition-all shadow-lg shadow-indigo-500/30 hover:shadow-xl hover:shadow-indigo-500/50"
-             >
-               Sign Up
-             </Link>
-           </motion.div>
-          
-          {/* Mobile Menu Toggle */}
-          <div className="flex items-center gap-2 md:hidden">
-            <ThemeToggle />
-            <motion.button 
-              whileTap={{ scale: 0.9 }}
-              className="text-gray-900 dark:text-white focus:outline-none"
-              onClick={() => setIsMenuOpen(!isMenuOpen)}
-            >
-              <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                {isMenuOpen ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                )}
-              </svg>
-            </motion.button>
-          </div>
-        </div>
-      </motion.nav>
-
-      {/* Mobile Menu */}
-      {isMenuOpen && (
-        <motion.div 
-          initial={{ opacity: 0, height: 0 }}
-          animate={{ opacity: 1, height: 'auto' }}
-          exit={{ opacity: 0, height: 0 }}
-          className="absolute top-20 left-0 w-full bg-white/95 dark:bg-gray-800/95 backdrop-blur-lg p-6 flex flex-col items-center gap-6 md:hidden z-40 shadow-2xl border-b border-gray-200 dark:border-gray-700"
-        >
-          {['Download', 'Nitro', 'Discover', 'Safety'].map((item, i) => (
-            <motion.a
-              key={item}
-              href="#"
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: i * 0.1 }}
-              className="text-lg font-semibold text-gray-800 dark:text-gray-200 hover:text-indigo-500 dark:hover:text-indigo-400"
-            >
-              {item}
-            </motion.a>
-          ))}
-          <Link to="/login" className="px-8 py-3 rounded-full bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white w-full text-center font-medium">
-            Login
-          </Link>
-          <Link to="/signup" className="px-8 py-3 rounded-full bg-gradient-to-r from-indigo-500 to-purple-600 text-white w-full text-center font-medium shadow-lg">
-            Sign Up
-          </Link>
-        </motion.div>
-      )}
-
-      {/* Hero Section */}
-      <header className="relative pt-20 md:pt-32 pb-32 md:pb-48 flex flex-col items-center text-center px-4 md:px-6">
+      {/* === POST-SCROLL CONTENT === */}
+      <section className="relative min-h-screen flex flex-col items-center justify-center px-6 py-20 bg-gradient-to-b from-[#050510] via-purple-950/20 to-[#050510] border-t border-white/5 z-20">
         <motion.div
-          style={{ y, opacity }}
-          className="absolute top-0 left-1/2 -translate-x-1/2 w-full md:w-3/4 h-full bg-gradient-to-r from-indigo-500/10 via-purple-500/10 to-pink-500/10 dark:from-indigo-600/20 dark:via-purple-600/20 dark:to-pink-600/20 blur-[100px] -z-10 rounded-full pointer-events-none"
-        />
-
-        <motion.h1 
           initial={{ opacity: 0, y: 30 }}
-          animate={{ opacity: 1, y: 0 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.8 }}
+          className="text-center"
+        >
+          <h2 className="text-6xl md:text-9xl font-black italic uppercase text-transparent bg-clip-text bg-gradient-to-r from-rose-200 via-rose-400 to-rose-600 mb-12 drop-shadow-2xl">
+            Live. Fast.<br />Connected.
+          </h2>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 30 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
           transition={{ duration: 0.8, delay: 0.2 }}
-          className="text-5xl md:text-8xl font-extrabold mb-8 tracking-tight leading-tight"
+          className="text-center max-w-2xl"
         >
-          <span className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 dark:from-indigo-400 dark:via-purple-400 dark:to-pink-400 bg-clip-text text-transparent">
-            IMAGINE A PLACE...
-          </span>
-        </motion.h1>
+          {/* Also using the image logo here for consistency */}
+          <img src={sparkHubLogo} alt="SparkHub" className="w-64 h-auto mx-auto mb-8 object-contain" />
+          <p className="text-xl text-gray-400 mb-12">The future of community is waiting. Join the revolution today.</p>
 
-        <motion.p 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8, delay: 0.4 }}
-          className="text-lg md:text-2xl text-gray-600 dark:text-gray-300 max-w-3xl mb-12 leading-relaxed"
-        >
-          ...where you can belong to a school club, a gaming group, or a worldwide art community. 
-          Where just you and a handful of friends can spend time together.
-        </motion.p>
-
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8, delay: 0.6 }}
-          className="flex flex-col sm:flex-row gap-6 mb-16 w-full sm:w-auto px-6 sm:px-0"
-        >
-          <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-            <Link 
-              to="/signup" 
-              className="px-8 py-4 rounded-full bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold text-lg transition flex items-center justify-center gap-3 shadow-2xl shadow-indigo-500/40 hover:shadow-indigo-500/60 w-full sm:w-auto group"
+          {/* CONDITIONAL BOTTOM CTA */}
+          {is_authenticated ? (
+            <Link
+              to="/channels"
+              className="inline-flex items-center gap-3 px-12 py-6 rounded-full bg-rose-600 text-white font-bold text-xl hover:scale-105 transition-transform shadow-[0_0_40px_rgba(225,29,72,0.4)]"
             >
-              <svg className="w-6 h-6 group-hover:animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-              </svg>
-              Download for Windows
+              Open SparkHub <MessageCircle className="w-5 h-5" />
             </Link>
-          </motion.div>
-          
-          <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-            <Link 
-              to="/signup" 
-              className="px-8 py-4 rounded-full bg-gray-900 dark:bg-gray-800 hover:bg-gray-800 dark:hover:bg-gray-700 text-white font-bold text-lg transition shadow-xl w-full sm:w-auto border border-gray-700 dark:border-gray-600"
+          ) : (
+            <Link
+              to="/signup"
+              className="inline-flex items-center gap-3 px-12 py-6 rounded-full bg-white text-black font-bold text-xl hover:scale-105 transition-transform shadow-[0_0_40px_rgba(255,255,255,0.3)]"
             >
-              Open in browser
+              Get Started <Globe className="w-5 h-5" />
             </Link>
-          </motion.div>
+          )}
         </motion.div>
-
-        {/* Hero Image with 3D Effect */}
-        <motion.div 
-          initial={{ opacity: 0, y: 50 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 1, delay: 0.8 }}
-          className="relative w-full max-w-6xl px-2 group perspective-1000"
-        >
-           <motion.div 
-             className="absolute -inset-2 bg-gradient-to-r from-purple-400 via-indigo-500 to-pink-500 dark:from-purple-600 dark:via-indigo-600 dark:to-pink-600 rounded-2xl blur-xl opacity-40 group-hover:opacity-70 transition duration-1000"
-             animate={{
-               scale: [1, 1.05, 1],
-             }}
-             transition={{
-               duration: 3,
-               repeat: Infinity,
-               ease: "easeInOut"
-             }}
-           />
-           <motion.img 
-            src={heroImage} 
-            alt="Talkora App Interface" 
-            className="relative rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full bg-white dark:bg-gray-900"
-            whileHover={{ 
-              rotateY: 5,
-              rotateX: 5,
-              scale: 1.02
-            }}
-            transition={{ type: "spring", stiffness: 300 }}
-           />
-        </motion.div>
-      </header>
-
-      {/* Feature Section with Scroll Animation */}
-      <section className="py-24 md:py-32 bg-gradient-to-b from-transparent to-gray-50 dark:to-gray-800/50 text-gray-900 dark:text-white transition-colors duration-300">
-        <div className="max-w-7xl mx-auto px-6 grid md:grid-cols-2 gap-16 items-center">
-           <motion.div
-             initial={{ opacity: 0, x: -50 }}
-             whileInView={{ opacity: 1, x: 0 }}
-             viewport={{ once: true }}
-             transition={{ duration: 0.8 }}
-             className="bg-gradient-to-br from-indigo-100 to-purple-100 dark:from-indigo-900/30 dark:to-purple-900/30 h-96 rounded-3xl flex items-center justify-center shadow-2xl border border-indigo-200 dark:border-indigo-800 overflow-hidden relative group"
-           >
-              <motion.div
-                className="absolute inset-0 bg-gradient-to-r from-indigo-500/20 to-purple-500/20"
-                animate={{
-                  scale: [1, 1.2, 1],
-                  rotate: [0, 90, 0],
-                }}
-                transition={{
-                  duration: 10,
-                  repeat: Infinity,
-                  ease: "linear"
-                }}
-              />
-              <span className="text-indigo-600 dark:text-indigo-400 font-bold text-2xl px-4 text-center relative z-10">Interactive Channels</span>
-           </motion.div>
-           
-           <motion.div 
-             initial={{ opacity: 0, x: 50 }}
-             whileInView={{ opacity: 1, x: 0 }}
-             viewport={{ once: true }}
-             transition={{ duration: 0.8 }}
-             className="text-center md:text-left"
-           >
-             <h2 className="text-4xl md:text-5xl font-bold mb-6 bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400 bg-clip-text text-transparent">
-               Create an invite-only place where you belong
-             </h2>
-             <p className="text-lg md:text-xl text-gray-600 dark:text-gray-300 leading-relaxed">
-               Talkora servers are organized into topic-based channels where you can collaborate, share, 
-               and just talk about your day without clogging up a group chat.
-             </p>
-           </motion.div>
-        </div>
       </section>
 
-       {/* CTA Section */}
-       <motion.section 
-         initial={{ opacity: 0 }}
-         whileInView={{ opacity: 1 }}
-         viewport={{ once: true }}
-         transition={{ duration: 1 }}
-         className="py-32 md:py-40 px-6 text-center bg-gradient-to-b from-gray-50 to-white dark:from-gray-800/50 dark:to-gray-900 transition-colors duration-300 relative overflow-hidden"
-       >
-         <motion.div
-           className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-gradient-to-r from-indigo-500/20 to-purple-500/20 rounded-full blur-3xl"
-           animate={{
-             scale: [1, 1.3, 1],
-             rotate: [0, 180, 360],
-           }}
-           transition={{
-             duration: 20,
-             repeat: Infinity,
-             ease: "linear"
-           }}
-         />
-         
-         <motion.h2 
-           initial={{ opacity: 0, y: 20 }}
-           whileInView={{ opacity: 1, y: 0 }}
-           viewport={{ once: true }}
-           className="text-4xl md:text-6xl font-extrabold mb-10 text-gray-900 dark:text-white relative z-10"
-         >
-           Ready to start your journey?
-         </motion.h2>
-         
-         <motion.div
-           initial={{ opacity: 0, y: 20 }}
-           whileInView={{ opacity: 1, y: 0 }}
-           viewport={{ once: true }}
-           transition={{ delay: 0.2 }}
-           whileHover={{ scale: 1.05 }}
-           whileTap={{ scale: 0.95 }}
-           className="relative z-10"
-         >
-           <Link 
-             to="/signup" 
-             className="inline-block px-12 py-5 rounded-full bg-gradient-to-r from-indigo-500 via-purple-600 to-pink-600 hover:from-indigo-600 hover:via-purple-700 hover:to-pink-700 text-white font-bold text-2xl shadow-2xl shadow-indigo-500/50 transition hover:shadow-indigo-500/70 hover:-translate-y-1 w-full md:w-auto"
-           >
-             Join Talkora Today
-           </Link>
-         </motion.div>
-       </motion.section>
-
-       {/* Footer */}
-       <footer className="bg-gray-900 dark:bg-black py-16 px-6 border-t border-gray-800 text-white transition-colors duration-300">
-         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-6">
-           <motion.div 
-             className="flex items-center gap-2"
-             whileHover={{ scale: 1.05 }}
-           >
-             <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full shadow-lg shadow-indigo-500/50"></div>
-             <span className="text-2xl font-bold bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">Talkora</span>
-           </motion.div>
-           
-           <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-             <Link 
-               to="/signup" 
-               className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 rounded-full text-sm font-semibold hover:from-indigo-500 hover:to-purple-500 transition shadow-lg shadow-indigo-500/30"
-             >
-               Sign Up
-             </Link>
-           </motion.div>
-         </div>
-       </footer>
+      {/* FOOTER */}
+      <footer className="relative bg-black pt-24 pb-12 px-6 border-t border-white/10 z-20">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-12 mb-16">
+          <div className="col-span-2">
+            <div className="flex items-center gap-3 mb-6">
+              <img src={mainLogo} alt="Logo" className="w-8 h-8" />
+              <img src={sparkHubLogo} alt="SparkHub" className="h-10 w-auto object-contain" />
+            </div>
+            <p className="text-gray-400 max-w-sm">
+              Reimagining how we connect, communicate, and build communities online.
+            </p>
+          </div>
+          <div>
+            <h3 className="font-bold mb-4">Product</h3>
+            <ul className="space-y-3 text-gray-400">
+              <li><a href="#" className="hover:text-white transition-colors">Features</a></li>
+              <li><a href="#" className="hover:text-white transition-colors">Showcase</a></li>
+              <li><a href="#" className="hover:text-white transition-colors">Mobile</a></li>
+            </ul>
+          </div>
+          <div>
+            <h3 className="font-bold mb-4">Company</h3>
+            <ul className="space-y-3 text-gray-400">
+              <li><a href="#" className="hover:text-white transition-colors">About</a></li>
+              <li><a href="#" className="hover:text-white transition-colors">Careers</a></li>
+              <li><a href="#" className="hover:text-white transition-colors">Blog</a></li>
+            </ul>
+          </div>
+        </div>
+        <div className="text-center text-gray-600 text-sm border-t border-white/5 pt-8">
+          © 2026 SparkHub Inc. All rights reserved.
+        </div>
+      </footer>
     </div>
   );
-}
+};
 
 export default LandingPage;

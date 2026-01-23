@@ -80,8 +80,8 @@ export const check_auth = createAsyncThunk(
             const response = await axios_Client.get("/api/auth/check");
             return response.data.user;
         } catch (err) {
-             // If 401/403, it means not logged in, which is expected state, not necessarily an "error" for the UI alert
-             if (err.response?.status === 401 || err.response?.status === 403) {
+            // If 401/403, it means not logged in, which is expected state, not necessarily an "error" for the UI alert
+            if (err.response?.status === 401 || err.response?.status === 403) {
                 return rejectWithValue({ message: "Unauthorized", forceLogout: true });
             }
             return rejectWithValue(err.response?.data || { message: "Server error" });
@@ -107,6 +107,23 @@ export const user_delete = createAsyncThunk(
         try {
             const response = await axios_Client.delete("/api/auth/deleteProfile");
             return response.data.message;
+        } catch (err) {
+            return rejectWithValue(err.response?.data || err.message);
+        }
+    }
+);
+
+export const update_profile = createAsyncThunk(
+    "auth/updateProfile",
+    async (formData, { rejectWithValue }) => {
+        try {
+            // Need multipart/form-data support
+            const response = await axios_Client.put("/api/auth/update-profile", formData, {
+                headers: {
+                    'Content-Type': 'multipart/form-data',
+                }
+            });
+            return response.data;
         } catch (err) {
             return rejectWithValue(err.response?.data || err.message);
         }
@@ -183,7 +200,7 @@ const auth_slice = createSlice({
                 state.user = null;
                 // Only set error if it's not a standard unauthorized check
                 if (!action.payload?.forceLogout) {
-                     state.error = action.payload?.message;
+                    state.error = action.payload?.message;
                 }
             })
 
@@ -193,7 +210,7 @@ const auth_slice = createSlice({
                 state.is_authenticated = false;
             })
             .addCase(user_logout.rejected, (state, action) => {
-                 state.error = action.payload?.message || 'Logout failed';
+                state.error = action.payload?.message || 'Logout failed';
             })
 
             // social_login
@@ -276,6 +293,19 @@ const auth_slice = createSlice({
             .addCase(user_delete.rejected, (state, action) => {
                 state.loading = false;
                 state.error = action.payload?.message || 'Delete profile failed';
+            })
+
+            // update profile
+            .addCase(update_profile.pending, (state) => {
+                state.loading = true;
+            })
+            .addCase(update_profile.fulfilled, (state, action) => {
+                state.loading = false;
+                state.user = action.payload.user; // Update user with new data
+            })
+            .addCase(update_profile.rejected, (state, action) => {
+                state.loading = false;
+                state.error = action.payload?.message || 'Update profile failed';
             });
     }
 });

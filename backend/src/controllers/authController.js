@@ -7,6 +7,7 @@ const otp_generator = require("otp-generator")
 const { sendOTPEmail } = require("../emailservice/otp.js")
 const redisclient = require("../database/redis.js")
 const admin = require('firebase-admin');
+const uploadOnCloudinary = require('../database/cloudinary');
 
 
 
@@ -25,7 +26,7 @@ let email_varification = async (req, res) => {
       specialChars: false,
       digits: true
     })
-    
+
     // Store OTP in Redis
     await redisclient.set(`otp:${email}`, otp, {
       EX: 300,
@@ -41,10 +42,10 @@ let email_varification = async (req, res) => {
     } catch (emailError) {
       console.error("SendGrid Error:", emailError.message);
       console.error("Full error:", emailError);
-      
+
       // Still return success since OTP is stored in Redis
       // This allows testing without email service
-      res.status(200).json({ 
+      res.status(200).json({
         message: "OTP generated (email service unavailable - check console for OTP)",
         warning: "Email service not configured. Check server console for OTP."
       });
@@ -104,6 +105,7 @@ let signup = async (req, res) => {
     if (dateOfBirth) {
       userData.dateOfBirth = new Date(dateOfBirth);
     }
+    console.log("hi")
 
     const user = await prisma.user.create({
       data: userData,
@@ -159,7 +161,7 @@ let login = async (req, res) => {
     }
 
 
-    let match = await bcrypt.compare(password,user.password);
+    let match = await bcrypt.compare(password, user.password);
 
     if (!match) {
       throw new Error("Invalid Credentials")
@@ -299,7 +301,7 @@ const social_login = async (req, res) => {
     }
     if (!user.firebase_uid || !user.avatar) {
       user.firebase_uid = user.firebase_uid || uid;
-      user.avatar = picture || user.avatar ;
+      user.avatar = picture || user.avatar;
       await prisma.user.update();
     }
 
@@ -363,7 +365,7 @@ const social_login_only = async (req, res) => {
 
     // If user doesn't exist, return error
     if (!user) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         message: "User not registered. Please sign up first.",
         error: "USER_NOT_FOUND"
       });
@@ -402,7 +404,7 @@ const social_login_only = async (req, res) => {
       setpassword,
       firebase_uid: user.firebase_uid,
     };
-    
+
     res.cookie("token", token, {
       sameSite: 'lax',
       maxAge: 30 * 24 * 60 * 60 * 1000,
@@ -426,145 +428,145 @@ const social_login_only = async (req, res) => {
 
 
 let admin_register = async (req, res) => {
-    try {
-        let { username, email, password, role } = req.body;
+  try {
+    let { username, email, password, role } = req.body;
 
-        req.body.password = await bcrypt.hash(req.body.password, 10);
+    req.body.password = await bcrypt.hash(req.body.password, 10);
 
-        let user = await prisma.user.create({
-          data:{
-                username,
-                email,
-                password: req.body.password,
-                role: role
-            }
+    let user = await prisma.user.create({
+      data: {
+        username,
+        email,
+        password: req.body.password,
+        role: role
+      }
     })
 
-        let reply = {
-            email: email,
-            Password: password,
-        }
-        res.status(201).json({
-            reply,
-            message: "share this credential with new admin"
-
-        })
-
+    let reply = {
+      email: email,
+      Password: password,
     }
-    catch (err) {
-        res.status(400).send("Error : " + err)
-    }
+    res.status(201).json({
+      reply,
+      message: "share this credential with new admin"
+
+    })
+
+  }
+  catch (err) {
+    res.status(400).send("Error : " + err)
+  }
 }
 
 let change_pass = async (req, res) => {
-    const { currentPassword, newPassword } = req.body;
-    const userId = req.user.id;
+  const { currentPassword, newPassword } = req.body;
+  const userId = req.user.id;
 
 
-    if (!currentPassword || !newPassword) {
-        return res.status(400).json({ message: 'Please provide all required fields.' });
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ message: 'Please provide all required fields.' });
+  }
+  if (newPassword.length < 8) {
+    return res.status(400).json({ message: 'New password must be at least 8 characters long.' });
+  }
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId }
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found.' });
     }
-    if (newPassword.length < 8) {
-        return res.status(400).json({ message: 'New password must be at least 8 characters long.' });
+
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Incorrect current password.' });
     }
 
-    try {
-        const user = await prisma.user.findUnique({
-            where: { id: userId }
-        });
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
 
-        if (!user) {
-            return res.status(404).json({ message: 'User not found.' });
-        }
+    user.password = hashedPassword;
+    await prisma.user.update({
+      where: { id: userId },
+      data: { password: hashedPassword }
+    });
 
-        const isMatch = await bcrypt.compare(currentPassword, user.password);
-        if (!isMatch) {
-            return res.status(400).json({ message: 'Incorrect current password.' });
-        }
+    return res.status(200).json({ message: 'Password updated successfully!' });
 
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(newPassword, salt);
-
-        user.password = hashedPassword;
-        await prisma.user.update({
-            where: { id: userId },
-            data: { password: hashedPassword }
-        });
-
-        return res.status(200).json({ message: 'Password updated successfully!' });
-
-    } catch (error) {
-        console.error('Error during password change:', error);
-        return res.status(500).json({ message: 'Server error. Please try again later.' });
-    }
+  } catch (error) {
+    console.error('Error during password change:', error);
+    return res.status(500).json({ message: 'Server error. Please try again later.' });
+  }
 }
 
 let set_pass = async (req, res) => {
-    const { password } = req.body;
-    const userId = req.user.id;
-    console.log(userId);
+  const { password } = req.body;
+  const userId = req.user.id;
+  console.log(userId);
 
 
 
-    if (!password) {
-        return res.status(400).json({ message: 'Please provide all required fields.' });
+  if (!password) {
+    return res.status(400).json({ message: 'Please provide all required fields.' });
+  }
+  if (password.length < 8) {
+    return res.status(400).json({ message: 'New password must be at least 8 characters long.' });
+  }
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId }
+    });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found.' });
     }
-    if (password.length < 8) {
-        return res.status(400).json({ message: 'New password must be at least 8 characters long.' });
-    }
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
 
-    try {
-        const user = await prisma.user.findUnique({
-            where: { id: userId }
-        });
-        if (!user) {
-            return res.status(404).json({ message: 'User not found.' });
-        }
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(password, salt);
+    user.password = hashedPassword;
+    await prisma.user.update({
+      where: { id: userId },
+      data: { password: hashedPassword }
+    });
 
-        user.password = hashedPassword;
-        await prisma.user.update({
-            where: { id: userId },
-            data: { password: hashedPassword }
-        });
+    return res.status(200).json({ message: 'Password updated successfully!' });
 
-        return res.status(200).json({ message: 'Password updated successfully!' });
-
-    } catch (error) {
-        console.error('Error during password change:', error);
-        return res.status(500).json({ message: 'Server error. Please try again later.' });
-    }
+  } catch (error) {
+    console.error('Error during password change:', error);
+    return res.status(500).json({ message: 'Server error. Please try again later.' });
+  }
 }
 
 const get_all_user = async (req, res) => {
-    try {
-        const users = await prisma.user.findMany({
-            select: {
-                id: true,
-                Name: true,
-                Emailid: true,
-                role: true
-            }
-        });
+  try {
+    const users = await prisma.user.findMany({
+      select: {
+        id: true,
+        Name: true,
+        Emailid: true,
+        role: true
+      }
+    });
 
-        if (!users || users.length === 0) {
-            return res.status(404).json({ message: "No users found." });
-        }
-
-        res.status(200).json({
-            success: true,
-            count: users.length,
-            users: users,
-        });
-
-    } catch (error) {
-        console.error("Error fetching users:", error);
-        res.status(500).json({
-            success: false,
-            message: "Server error while fetching users.",
-        });
+    if (!users || users.length === 0) {
+      return res.status(404).json({ message: "No users found." });
     }
+
+    res.status(200).json({
+      success: true,
+      count: users.length,
+      users: users,
+    });
+
+  } catch (error) {
+    console.error("Error fetching users:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error while fetching users.",
+    });
+  }
 }
 
 
@@ -572,7 +574,7 @@ const get_all_user = async (req, res) => {
 const check_username = async (req, res) => {
   try {
     const { username } = req.body;
-    
+
     // Basic validation
     if (!username || username.length < 3) {
       return res.status(400).json({ message: "Username must be at least 3 characters" });
@@ -590,34 +592,34 @@ const check_username = async (req, res) => {
     // Username is taken, generate suggestions
     const suggestions = [];
     const candidates = new Set();
-    
+
     // Generate candidates
     // 1. Append 4 random digits
     while (candidates.size < 5) {
       const suffix = Math.floor(1000 + Math.random() * 9000);
       candidates.add(`${username}${suffix}`);
     }
-    
+
     // 2. Append current year
     candidates.add(`${username}${new Date().getFullYear()}`);
 
     // Check which candidates are actually available
     for (const candidate of candidates) {
-        if (suggestions.length >= 3) break;
+      if (suggestions.length >= 3) break;
 
-        const taken = await prisma.user.findFirst({
-            where: { username: { equals: candidate, mode: 'insensitive' } }
-        });
+      const taken = await prisma.user.findFirst({
+        where: { username: { equals: candidate, mode: 'insensitive' } }
+      });
 
-        if (!taken) {
-            suggestions.push(candidate);
-        }
+      if (!taken) {
+        suggestions.push(candidate);
+      }
     }
 
-    return res.status(200).json({ 
-      available: false, 
+    return res.status(200).json({
+      available: false,
       suggestions,
-      message: "Username is taken" 
+      message: "Username is taken"
     });
 
   } catch (err) {
@@ -628,64 +630,135 @@ const check_username = async (req, res) => {
 
 
 const change_role = async (req, res) => {
-    const { userId } = req.params;
-    const { role: newRole } = req.body;
+  const { userId } = req.params;
+  const { role: newRole } = req.body;
 
-    if (!newRole || !['user', 'admin'].includes(newRole)) {
-        return res.status(400).json({
-            success: false,
-            message: "Invalid role specified. Role must be 'user' or 'admin'."
-        });
+  if (!newRole || !['user', 'admin'].includes(newRole)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid role specified. Role must be 'user' or 'admin'."
+    });
+  }
+
+
+
+  if (req.user.id === userId) {
+    return res.status(403).json({
+      success: false,
+      message: "Admins cannot change their own role."
+    });
+  }
+
+  try {
+    const userToUpdate = await prisma.user.findUnique({
+      where: { id: userId }
+    });
+
+    if (!userToUpdate) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found."
+      });
     }
 
+    userToUpdate.role = newRole;
+    await prisma.user.update({
+      where: { id: userId },
+      data: { role: newRole }
+    });
 
+    res.status(200).json({
+      success: true,
+      message: `Successfully updated role for ${userToUpdate.Name} to '${newRole}'.`,
+      user: {
+        id: userToUpdate.id,
+        name: userToUpdate.username,
+        email: userToUpdate.email,
+        role: userToUpdate.role
+      }
+    });
 
-    if (req.user.id === userId) {
-        return res.status(403).json({
-            success: false,
-            message: "Admins cannot change their own role."
-        });
-    }
-
-    try {
-        const userToUpdate = await prisma.user.findUnique({
-            where: { id: userId }
-        });
-
-        if (!userToUpdate) {
-            return res.status(404).json({
-                success: false,
-                message: "User not found."
-            });
-        }
-
-        userToUpdate.role = newRole;
-        await prisma.user.update({
-            where: { id: userId },
-            data: { role: newRole }
-        });
-
-        res.status(200).json({
-            success: true,
-            message: `Successfully updated role for ${userToUpdate.Name} to '${newRole}'.`,
-            user: {
-                id: userToUpdate.id,
-                name: userToUpdate.username,
-                email: userToUpdate.email,
-                role: userToUpdate.role
-            }
-        });
-
-    } catch (err) {
-        console.error("Error updating user role:", err);
-        res.status(500).json({
-            success: false,
-            message: "An internal server error occurred."
-        });
-    }
+  } catch (err) {
+    console.error("Error updating user role:", err);
+    res.status(500).json({
+      success: false,
+      message: "An internal server error occurred."
+    });
+  }
 };
 
 
+
+
+const update_profile = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { username } = req.body;
+    const file = req.file;
+
+    const updateData = {};
+
+    // 1. Handle Username Update
+    if (username && username.trim() !== '') {
+      if (username.length < 3) {
+        return res.status(400).json({ message: "Username must be at least 3 characters" });
+      }
+
+      // Check uniqueness if username is changing
+      if (username !== req.user.username) {
+        const existingUser = await prisma.user.findFirst({
+          where: {
+            username: { equals: username, mode: 'insensitive' },
+            NOT: { id: userId }
+          }
+        });
+
+        if (existingUser) {
+          return res.status(400).json({ message: "Username is already taken" });
+        }
+        updateData.username = username;
+      }
+    }
+
+    // 2. Handle Avatar Update
+    if (file) {
+      const result = await uploadOnCloudinary(file.path);
+      if (result) {
+        updateData.avatar = result;
+      }
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ message: "No changes provided" });
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: updateData,
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        avatar: true,
+        role: true,
+        createdAt: true,
+        firebase_uid: true
+      }
+    });
+
+    // Add setpassword field for compatibility with frontend
+    const setpassword = req.user.password ? true : false;
+
+    res.status(200).json({
+      message: "Profile updated successfully",
+      user: { ...updatedUser, setpassword }
+    });
+
+  } catch (err) {
+    console.error("Update profile error:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
 
 module.exports = {
   signup,
@@ -701,5 +774,6 @@ module.exports = {
   email_varification,
   admin_register,
   get_all_user,
-  change_role
+  change_role,
+  update_profile
 };

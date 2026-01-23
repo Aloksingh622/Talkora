@@ -16,8 +16,11 @@ const {
     set_pass,
     admin_register,
     get_all_user,
-    change_role
+    change_role,
+    update_profile
 } = require('../controllers/authController.js')
+
+const upload = require('../middlewares/multer.middleware');
 
 
 AuthRouter.post("/emailVerification", email_varification)
@@ -34,6 +37,7 @@ AuthRouter.post("/set-password", usermiddleware, set_pass)
 AuthRouter.get("/alluser", adminmiddleware, get_all_user)
 AuthRouter.put("/updateRole/:userId", adminmiddleware, change_role)
 AuthRouter.post("/adminRegister", adminmiddleware, admin_register)
+AuthRouter.put("/update-profile", usermiddleware, upload.single('avatar'), update_profile)
 
 
 module.exports = AuthRouter;

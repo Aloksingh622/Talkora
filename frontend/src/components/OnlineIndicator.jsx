@@ -2,19 +2,23 @@ import React from 'react';
 
 const OnlineIndicator = ({ online, size = 'sm' }) => {
     const sizeClasses = {
-        xs: 'w-2 h-2',
-        sm: 'w-3 h-3',
+        xs: 'w-2.5 h-2.5',
+        sm: 'w-3.5 h-3.5',
         md: 'w-4 h-4',
     };
 
     return (
         <div className="relative inline-block">
-            <div
-                className={`${sizeClasses[size]} rounded-full ${online ? 'bg-green-500' : 'bg-gray-400'} border-2 border-white dark:border-gray-900`}
-                title={online ? 'Online' : 'Offline'}
-            />
-            {online && (
-                <div className={`absolute inset-0 ${sizeClasses[size]} rounded-full bg-green-500 animate-ping opacity-75`} />
+            {online ? (
+                <div
+                    className={`${sizeClasses[size]} rounded-full bg-green-500 border-2 border-white dark:border-[#0a0a10]`}
+                    title="Online"
+                />
+            ) : (
+                <div
+                    className={`${sizeClasses[size]} rounded-full bg-gray-400 dark:bg-gray-600 border-2 border-white dark:border-[#0a0a10]`}
+                    title="Offline"
+                />
             )}
         </div>
     );
