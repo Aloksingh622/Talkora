@@ -1,7 +1,20 @@
 import axios_Client from "../utils/axios";
 
 // Send Message (REST fallback)
-// Send Message (REST fallback)
+// Upload File
+export const uploadFile = async (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await axios_Client.post('/api/upload', formData, {
+        headers: {
+            "Content-Type": "multipart/form-data",
+        },
+    });
+    return response.data;
+};
+
+// Send Message (REST fallback - Deprecated for Realtime)
 export const sendMessageREST = async (channelId, content, file = null) => {
     const formData = new FormData();
     if (content) formData.append('content', content);

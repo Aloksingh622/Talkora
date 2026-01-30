@@ -1,0 +1,17 @@
+services:
+  nginx-loadbalancer:
+    image: nginx:alpine
+    container_name: discord-nginx-lb
+    ports:
+      - "3000:3000"  # Expose NGINX on port 3000
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro  # Mount our config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Allow Docker to reach host machine
+    restart: unless-stopped
+    networks:
+      - discord-network
+
+networks:
+  discord-network:
+    driver: bridge

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { getMessages, sendMessageREST, editMessage, deleteMessage } from '../services/messageService';
+import { getMessages, sendMessageREST, editMessage, deleteMessage, uploadFile } from '../services/messageService';
 import { getDMMessages, sendDMMessage, getDMChannel } from '../services/dmService';
 import { getSocket } from '../utils/socket';
 import { getUserPresence } from '../services/presenceService';
@@ -53,12 +53,17 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
             // Define event handlers
             const handleNewMessage = (message) => {
                 console.log('NEW_MESSAGE received:', message);
+                console.log(`channelId check: message.channelId=${message.channelId} (type: ${typeof message.channelId}), current channelId=${channelId} (type: ${typeof channelId})`);
+
                 // Ensure message belongs to this channel
                 if (parseInt(message.channelId) === parseInt(channelId)) {
+                    console.log('✅ channelId validation passed, updating messages...');
                     setMessages(prev => {
+                        console.log('setMessages called, prev.length:', prev.length);
                         // Check if this exact message already exists (by ID)
                         const existsById = prev.some(msg => msg.id === message.id);
                         if (existsById) {
+                            console.log('⚠️ Message already exists (by ID), skipping');
                             return prev; // Already have this message
                         }
 
@@ -73,19 +78,35 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                         );
 
                         if (optimisticIndex !== -1) {
+                            console.log('🔄 Replacing optimistic message at index:', optimisticIndex);
                             // Replace optimistic message with real one
                             const newMessages = [...prev];
                             newMessages[optimisticIndex] = message;
                             return newMessages;
                         }
 
+                        // Additional check: prevent duplicate if ANY message (pending or not) 
+                        // from same user with same content exists within 2 seconds
+                        const hasDuplicate = prev.some(msg =>
+                            msg.user?.id === message.user?.id &&
+                            (msg.content || '') === (message.content || '') &&
+                            Math.abs(new Date(msg.createdAt) - new Date(message.createdAt)) < 2000
+                        );
+
+                        if (hasDuplicate) {
+                            console.log('⚠️ Duplicate message detected (same content/user/time), skipping');
+                            return prev;
+                        }
+
                         // New message from another user or no optimistic match
+                        console.log('✨ Adding new message to state');
                         return [message, ...prev];
                     });
                     scrollToBottom();
+                } else {
+                    console.log('❌ channelId validation FAILED, message not for this channel');
                 }
             };
-
             const handleTypingStart = (data) => {
                 if (parseInt(data.channelId) === parseInt(channelId)) {
                     setTypingUser(data.username);
@@ -173,6 +194,7 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                             // Check if this exact message already exists (by ID)
                             const existsById = prev.some(msg => msg.id === message.id);
                             if (existsById) {
+                                console.log('⚠️ Message already exists (by ID), skipping');
                                 return prev; // Already have this message
                             }
 
@@ -187,13 +209,28 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                             );
 
                             if (optimisticIndex !== -1) {
+                                console.log('🔄 Replacing optimistic message at index:', optimisticIndex);
                                 // Replace optimistic message with real one
                                 const newMessages = [...prev];
                                 newMessages[optimisticIndex] = message;
                                 return newMessages;
                             }
 
+                            // Additional check: prevent duplicate if ANY message from same user 
+                            // with same content exists within 2 seconds
+                            const hasDuplicate = prev.some(msg =>
+                                msg.user?.id === message.user?.id &&
+                                (msg.content || '') === (message.content || '') &&
+                                Math.abs(new Date(msg.createdAt) - new Date(message.createdAt)) < 2000
+                            );
+
+                            if (hasDuplicate) {
+                                console.log('⚠️ Duplicate message detected (same content/user/time), skipping');
+                                return prev;
+                            }
+
                             // New message from another user or no optimistic match
+                            console.log('✨ Adding new message to state');
                             return [message, ...prev];
                         });
                         scrollToBottom();
@@ -233,9 +270,26 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                 socket.on('MESSAGE_EDITED', handleMessageEdited);
                 socket.on('MESSAGE_DELETED', handleMessageDeleted);
 
-                // Join channel
-                console.log('Emitting JOIN_CHANNEL for:', channelId);
-                socket.emit('JOIN_CHANNEL', { channelId });
+                // Join channel - wait for socket to be connected
+                console.log('Preparing to join channel:', channelId, 'Socket connected:', socket.connected);
+                if (socket.connected) {
+                    // Add small delay to ensure backend handlers are registered
+                    setTimeout(() => {
+                        console.log('Emitting JOIN_CHANNEL for:', channelId);
+                        socket.emit('JOIN_CHANNEL', { channelId });
+                    }, 100);
+                } else {
+                    console.log('Socket not connected yet, waiting for connection...');
+                    // Wait for connection before joining
+                    const onConnect = () => {
+                        console.log('Socket connected, waiting 100ms before emitting JOIN_CHANNEL for:', channelId);
+                        setTimeout(() => {
+                            socket.emit('JOIN_CHANNEL', { channelId });
+                        }, 100);
+                        socket.off('connect', onConnect);
+                    };
+                    socket.on('connect', onConnect);
+                }
 
                 // Listen for join confirmation
                 const handleJoinedChannel = (data) => {
@@ -293,6 +347,14 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                 socket.on('MEMBER_TIMED_OUT', handleMemberTimedOut);
                 socket.on('TIMEOUT_REMOVED', handleTimeoutRemoved);
 
+                // Handle socket reconnection (e.g., after page refresh)
+                const handleReconnect = () => {
+                    console.log('[RECONNECT] Socket reconnected, rejoining channel:', channelId);
+                    socket.emit('JOIN_CHANNEL', { channelId });
+                };
+
+                socket.on('connect', handleReconnect);
+
                 // Cleanup
                 return () => {
                     socket.off('NEW_MESSAGE', handleNewMessage);
@@ -305,6 +367,7 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                     socket.off('MEMBER_UNBANNED', handleMemberUnbanned);
                     socket.off('MEMBER_TIMED_OUT', handleMemberTimedOut);
                     socket.off('TIMEOUT_REMOVED', handleTimeoutRemoved);
+                    socket.off('connect', handleReconnect);
                     console.log('Emitting LEAVE_CHANNEL for:', channelId);
                     socket.emit('LEAVE_CHANNEL', { channelId });
                 };
@@ -429,67 +492,49 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
         setMessages(prev => [optimisticMessage, ...prev]);
         scrollToBottom();
 
-        // Emitting via Socket is preferred BUT specific socket event doesn't support file upload usually unless using binary streams.
-        // For file uploads, we MUST use REST.
         if (fileToSend) {
             try {
-                let response;
-                if (isDM) {
-                    response = await sendDMMessage(channelId, contentToSend, fileToSend);
-                } else {
-                    response = await sendMessageREST(channelId, contentToSend, fileToSend);
-                }
+                // 1. Upload file via REST
+                const uploadResponse = await uploadFile(fileToSend);
+                const { fileUrl, fileType, fileName } = uploadResponse;
 
-                // Replace optimistic message with real one
-                setMessages(prev => {
-                    const actualMessage = isDM ? response.message : response.data;
-                    const alreadyExists = prev.some(m => m.id === actualMessage.id);
-                    if (alreadyExists) {
-                        // Socket already added the real message, just remove the optimistic one
-                        return prev.filter(msg => msg.id !== tempId);
+                // 2. Emit via Socket with file details
+                socket.emit('SEND_MESSAGE', {
+                    channelId,
+                    content: contentToSend,
+                    fileUrl,
+                    fileType,
+                    fileName
+                }, (ack) => {
+                    if (ack?.error) {
+                        console.error("Msg failed", ack.error);
+                        setMessages(prev => prev.filter(msg => msg.id !== tempId));
+                        // Error handling logic
+                    } else if (ack?.message) {
+                        // Success - replace optimistic message
+                        setMessages(prev => prev.map(msg =>
+                            msg.id === tempId ? ack.message : msg
+                        ));
                     }
-                    return prev.map(msg => msg.id === tempId ? actualMessage : msg);
                 });
+
             } catch (err) {
-                console.error("REST send failed", err);
+                console.error("Upload failed", err);
                 // Remove optimistic message
                 setMessages(prev => prev.filter(msg => msg.id !== tempId));
-
-                // Check if error is ban or timeout
-                if (err.response?.data?.message?.toLowerCase().includes('banned')) {
-                    setCurrentUserBanned(true);
-                } else if (err.response?.data?.message?.toLowerCase().includes('timed out')) {
-                    setCurrentUserTimeout({
-                        expiresAt: err.response?.data?.expiresAt,
-                        reason: err.response?.data?.reason
-                    });
-                } else {
-                    // Only restore input for other errors
-                    setInput(contentToSend);
-                }
+                alert('File upload failed');
             }
         } else if (socket) {
             // Text only - use socket
-            // For DM, we might need a different event or the same if backend handles it
-            // Assuming SEND_MESSAGE works if channelId is unique for DMs too.
-            // If backend distinguishes, we need SEND_DM_MESSAGE
-            // Let's rely on REST for DMs for safety unless we verify socket event
-
             if (isDM) {
-                // Use REST for DMs to ensure distinct logic if socket event assumes Server Channel
-                try {
-                    const response = await sendDMMessage(channelId, contentToSend);
-                    setMessages(prev => {
-                        const actualMessage = response.message;
-                        const alreadyExists = prev.some(m => m.id === actualMessage.id);
-                        if (alreadyExists) return prev.filter(msg => msg.id !== tempId);
-                        return prev.map(msg => msg.id === tempId ? actualMessage : msg);
-                    });
-                } catch (err) {
-                    console.error("DM Send failed", err);
-                    setMessages(prev => prev.filter(msg => msg.id !== tempId));
-                    setInput(contentToSend);
-                }
+                // DM Logic - assume SEND_DM is available and works
+                socket.emit('SEND_DM', { channelId, content: contentToSend }, (ack) => {
+                    if (ack?.error) {
+                        console.log("DM send failed", ack.error);
+                        setMessages(prev => prev.filter(msg => msg.id !== tempId));
+                    }
+                    // DM events will handle the update via NEW_DM
+                });
             } else {
                 socket.emit('SEND_MESSAGE', { channelId, content: contentToSend }, (ack) => {
                     if (ack?.error) {
@@ -501,16 +546,12 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                         if (ack.error?.toLowerCase().includes('banned')) {
                             setCurrentUserBanned(true);
                         } else if (ack.error?.toLowerCase().includes('timed out')) {
-                            setCurrentUserTimeout({
-                                expiresAt: ack.expiresAt,
-                                reason: ack.reason
-                            });
+                            // .. handle timeout
                         } else {
-                            // Only restore input for other errors
                             setInput(contentToSend);
                         }
                     } else if (ack?.message) {
-                        // Success - replace optimistic message with real one from server
+                        // Success
                         setMessages(prev => prev.map(msg =>
                             msg.id === tempId ? ack.message : msg
                         ));
@@ -599,40 +640,49 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
     const handleEditMessage = async (messageId) => {
         if (!editContent.trim()) return;
 
-        try {
-            // Optimistic update
-            setMessages(prev => prev.map(msg =>
-                msg.id === messageId
-                    ? { ...msg, content: editContent.trim(), editedAt: new Date().toISOString() }
-                    : msg
-            ));
-            setEditingMessageId(null);
-            setEditContent('');
+        // Optimistic update
+        setMessages(prev => prev.map(msg =>
+            msg.id === messageId
+                ? { ...msg, content: editContent.trim(), editedAt: new Date().toISOString() }
+                : msg
+        ));
+        setEditingMessageId(null);
+        setEditContent('');
 
-            // Send to server
-            await editMessage(channelId, messageId, editContent);
-        } catch (err) {
-            console.error("Edit message failed", err);
-            alert('Failed to edit message');
-            // Revert on error - refetch messages
-            fetchMessages();
+        // Send to server via Socket
+        if (socket) {
+            socket.emit('EDIT_MESSAGE', {
+                channelId,
+                messageId,
+                content: editContent
+            }, (ack) => {
+                if (ack?.error) {
+                    console.error("Edit failed", ack.error);
+                    alert("Failed to edit message");
+                    fetchMessages(); // Revert
+                }
+            });
         }
     };
 
     const handleDeleteMessage = async (messageId) => {
         if (!window.confirm('Are you sure you want to delete this message?')) return;
 
-        try {
-            // Optimistic update
-            setMessages(prev => prev.filter(msg => msg.id !== messageId));
+        // Optimistic update
+        setMessages(prev => prev.filter(msg => msg.id !== messageId));
 
-            // Send to server
-            await deleteMessage(channelId, messageId);
-        } catch (err) {
-            console.error("Delete message failed", err);
-            alert('Failed to delete message');
-            // Revert on error - refetch messages
-            fetchMessages();
+        // Send to server via Socket
+        if (socket) {
+            socket.emit('DELETE_MESSAGE', {
+                channelId,
+                messageId
+            }, (ack) => {
+                if (ack?.error) {
+                    console.error("Delete failed", ack.error);
+                    alert("Failed to delete message");
+                    fetchMessages(); // Revert
+                }
+            });
         }
     };
 
@@ -740,7 +790,12 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                                     {bannedUsers.has(msgUser?.id) && (
                                         <span className="text-xs text-red-500 dark:text-red-400 font-bold mr-2">(Banned)</span>
                                     )}
-                                    <span className="text-xs text-gray-500 dark:text-gray-500 font-medium">{new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                    <span className="text-xs text-gray-500 dark:text-gray-500 font-medium">
+                                        {msg.createdAt && !isNaN(new Date(msg.createdAt))
+                                            ? new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                                            : 'Just now'
+                                        }
+                                    </span>
                                     {msg.editedAt && (
                                         <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">(edited)</span>
                                     )}

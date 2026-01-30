@@ -8,6 +8,7 @@ export const initSocket = (token) => {
 
     const socketOptions = {
         withCredentials: true,
+        transports: ['websocket'], // Force WebSocket only - bypass polling
     };
 
     // Only add auth if token is provided (for manual token auth)
@@ -16,14 +17,27 @@ export const initSocket = (token) => {
         socketOptions.auth = { token };
     }
 
-    socket = io(import.meta.env.VITE_API_URL || 'http://localhost:4000', socketOptions);
+    socket = io(import.meta.env.VITE_REALTIME_URL || 'http://localhost:3001', socketOptions);
 
     socket.on("connect", () => {
-        console.log("WebSocket connected:", socket.id);
+        console.log("✅ WebSocket connected:", socket.id);
+    });
+
+    socket.on("disconnect", (reason) => {
+        console.warn("❌ WebSocket disconnected. Reason:", reason);
+        if (reason === "io server disconnect") {
+            console.error("Server disconnected the client - check backend logs!");
+        } else if (reason === "transport close") {
+            console.error("Transport closed - possible NGINX/network issue");
+        }
     });
 
     socket.on("connect_error", (err) => {
-        console.error("WebSocket connection error:", err.message);
+        console.error("🔴 WebSocket connection error:", err.message, err);
+    });
+
+    socket.on("error", (err) => {
+        console.error("🔴 WebSocket error:", err);
     });
 
     return socket;
