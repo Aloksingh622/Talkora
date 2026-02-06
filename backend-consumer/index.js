@@ -2,7 +2,7 @@ const cluster = require('cluster');
 require('dotenv').config();
 
 // Reduced to 5 workers to stay under Redis connection limit (30 partitions / 5 = 6 partitions per worker)
-const numWorkers = 5;
+const numWorkers = 1;
 
 if (cluster.isPrimary) {
     console.log(`Master ${process.pid} is running`);

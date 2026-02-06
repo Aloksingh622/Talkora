@@ -245,6 +245,8 @@ let delete_profile = async (req, res) => {
 
 let check_user = async (req, res) => {
   try {
+
+    console.log("hiiiiii      dcdddccc")
     const user = req.user;
     let setpassword = req.user.password ? true : false;
     const reply = {

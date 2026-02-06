@@ -14,6 +14,12 @@ const checkRateLimit = async (userId) => {
         // If it's the first message, set the expiration
         if (currentCount === 1) {
             await redisclient.expire(key, RATE_LIMIT_WINDOW);
+        } else {
+            // Safety: Ensure it has an expiry (in case server crashed between INCR and EXPIRE previously)
+            const ttl = await redisclient.ttl(key);
+            if (ttl === -1) {
+                await redisclient.expire(key, RATE_LIMIT_WINDOW);
+            }
         }
 
         if (currentCount > RATE_LIMIT_MAX) {

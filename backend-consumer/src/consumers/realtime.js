@@ -29,8 +29,14 @@ const io = new Emitter(redisClient, {
 });
 
 const run = async () => {
-    await redisClient.connect();
-    console.log('Redis Emitter connected');
+    console.log('[REALTIME-CONSUMER] Connecting to Redis...');
+    try {
+        await redisClient.connect();
+        console.log('[REALTIME-CONSUMER] ✅ Redis Emitter connected');
+    } catch (err) {
+        console.error('[REALTIME-CONSUMER] ❌ Redis Connection Failed:', err);
+        throw err;
+    }
 
     // Debug: Log what we're publishing to Redis
     redisClient.on('ready', () => {

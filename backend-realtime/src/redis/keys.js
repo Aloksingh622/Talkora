@@ -8,6 +8,9 @@ const getSocketUserKey = (socketId) => `socket:${socketId}:user`;
 const getUserSocketKey = (userId) => `user:${userId}:socket`;
 const getTypingKey = (channelId, userId) => `typing:${channelId}:${userId}`;
 const getRateLimitKey = (userId) => `rate:message:${userId}`;
+const getChannelServerKey = (channelId) => `cache:channel:${channelId}:serverId`;
+const getUserPermissionsKey = (userId, serverId) => `cache:user:${userId}:server:${serverId}:perms`;
+const getDMChannelKey = (channelId) => `cache:dm:${channelId}:members`;
 
 module.exports = {
     getOnlineUserKey,
@@ -17,4 +20,7 @@ module.exports = {
     getUserSocketKey,
     getTypingKey,
     getRateLimitKey,
+    getChannelServerKey,
+    getUserPermissionsKey,
+    getDMChannelKey,
 };

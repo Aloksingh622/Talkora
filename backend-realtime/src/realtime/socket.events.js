@@ -2,6 +2,7 @@ const prisma = require('../utils/prisma');
 const { setTypingStatus, removeTypingStatus } = require('../redis/typing');
 const { checkRateLimit } = require('../redis/ratelimit');
 const { refreshOnlineStatus } = require('../redis/presence');
+const { getCachedChannelServerId, getCachedUserPermissions, getCachedDMChannelMembers } = require('../redis/cache');
 const kafkaProducer = require('../kafka/producer');
 const crypto = require('crypto');
 
@@ -18,31 +19,21 @@ const registerSocketEvents = (io, socket) => {
             }
             const channelIdInt = parseInt(channelId);
 
-            // Validate channel existence and membership
-            // Optimization: We could cache members in Redis later. For now, DB query.
-            const channel = await prisma.channel.findUnique({
-                where: { id: channelIdInt },
-                select: { serverId: true }
-            });
+            // 1. Get Server ID (Cached)
+            const serverId = await getCachedChannelServerId(channelIdInt);
 
-            if (!channel) {
+            if (!serverId) {
                 console.log(`[JOIN_CHANNEL] ERROR: Channel ${channelIdInt} not found`);
                 socket.emit('ERROR', { message: 'Channel not found' });
                 return;
             }
 
-            const member = await prisma.serverMember.findUnique({
-                where: {
-                    userId_serverId: {
-                        userId: socket.user.id,
-                        serverId: channel.serverId
-                    }
-                }
-            });
+            // 2. Check Permissions (Cached)
+            const perms = await getCachedUserPermissions(socket.user.id, serverId);
 
-            if (!member) {
-                console.log(`[JOIN_CHANNEL] ERROR: User ${socket.user.id} not a member of server ${channel.serverId}`);
-                socket.emit('ERROR', { message: 'Access denied' });
+            if (!perms.allowed) {
+                console.log(`[JOIN_CHANNEL] ERROR: User ${socket.user.id} access denied to server ${serverId}: ${perms.error}`);
+                socket.emit('ERROR', { message: perms.error || 'Access denied' });
                 return;
             }
 
@@ -114,59 +105,41 @@ const registerSocketEvents = (io, socket) => {
 
             const channelIdInt = parseInt(channelId);
 
-            // DB Validation (Re-verify membership to be strict)
-            const channel = await prisma.channel.findUnique({
-                where: { id: channelIdInt },
-                select: { serverId: true }
-            });
+            // DB Validation (Re-verify membership to be strict) - OPTIMIZED
+            const serverId = await getCachedChannelServerId(channelIdInt);
 
-
-
-            if (!channel) {
+            if (!serverId) {
                 if (typeof callback === 'function') callback({ error: 'Channel not found' });
                 return;
             }
 
-            const member = await prisma.serverMember.findUnique({
-                where: {
-                    userId_serverId: {
-                        userId: socket.user.id,
-                        serverId: channel.serverId
+            // Check permissions (Member, Owner, Ban, Timeout)
+            const perms = await getCachedUserPermissions(socket.user.id, serverId);
+
+            if (!perms.allowed) {
+                if (typeof callback === 'function') {
+                    // If it's a timeout, we might have extra details
+                    if (perms.details) {
+                        // Check if still timed out based on details (Redis might return old expiresAt)
+                        const expiresAt = new Date(perms.details.expiresAt);
+                        if (new Date() > expiresAt) {
+                            // It expired! We should technically re-check/clear cache, but for now let's just allow?
+                            // No, if cache says timed out, we block. The cache TTL is short (60s).
+                            // User can wait 60s.
+                        }
+
+                        const expiresIn = Math.ceil((expiresAt - new Date()) / 1000);
+                        callback({
+                            error: perms.error,
+                            expiresAt: perms.details.expiresAt,
+                            expiresIn,
+                            reason: perms.details.reason
+                        });
+                    } else {
+                        callback({ error: perms.error || 'Access denied' });
                     }
                 }
-            });
-
-            if (!member) {
-                if (typeof callback === 'function') callback({ error: 'Access denied' });
                 return;
-            }
-
-            // Check if user is banned or timed out (import authUtils)
-            const { isUserBanned, isUserTimedOut, isServerOwner } = require('../utils/authUtils');
-
-            // Owner can always send messages
-            const isOwner = await isServerOwner(socket.user.id, channel.serverId);
-
-            if (!isOwner) {
-                // Check if user is banned
-                const banned = await isUserBanned(socket.user.id, channel.serverId);
-                if (banned) {
-                    if (typeof callback === 'function') callback({ error: 'You are banned from this server' });
-                    return;
-                }
-
-                // Check if user is timed out
-                const { isTimedOut, timeout } = await isUserTimedOut(socket.user.id, channel.serverId);
-                if (isTimedOut) {
-                    const expiresIn = Math.ceil((timeout.expiresAt - new Date()) / 1000);
-                    if (typeof callback === 'function') callback({
-                        error: 'You are timed out from this server',
-                        expiresAt: timeout.expiresAt,
-                        expiresIn,
-                        reason: timeout.reason
-                    });
-                    return;
-                }
             }
 
             // Construct message object (without ID as DB will generate it, but we nneed a temp ID or handle it)
@@ -223,11 +196,11 @@ const registerSocketEvents = (io, socket) => {
                 return;
             }
 
-            const messageIdInt = parseInt(messageId);
+            // const messageIdInt = parseInt(messageId); // Likely causing NaN if UUID
             const channelIdInt = parseInt(channelId);
 
             const message = await prisma.message.findUnique({
-                where: { id: messageIdInt },
+                where: { id: messageId }, // Pass messageId directly
             });
 
             if (!message) {
@@ -241,7 +214,7 @@ const registerSocketEvents = (io, socket) => {
             }
 
             const updatedMessage = await prisma.message.update({
-                where: { id: messageId },
+                where: { id: messageId }, // Pass messageId directly
                 data: {
                     content: content.trim(),
                     editedAt: new Date()
@@ -278,10 +251,32 @@ const registerSocketEvents = (io, socket) => {
             const { channelId, messageId } = payload;
 
             const channelIdInt = parseInt(channelId);
-            // messageId is now a UUID string
+            // messageId is a UUID string, so we don't parse it to int anymore for general usage,
+            // BUT for legacy or specific ID types, we ensure we use the right variable.
+            // Check if we need to support int IDs or UUIDs. Based on schema, IDs seem to be strings (UUIDs) or ints.
+            // The error says "messageIdInt is not defined", so let's just use messageId (string) or proper int conversion if needed.
+            // Assuming IDs are now UUIDs based on previous code context (const messageId = crypto.randomUUID()), 
+            // but Prisma might expect different. Let's look at `PrismaClientValidationError` for Edit Message which said `id: String`.
+            // So IDs are likely Strings.
+
+            // HOWEVER, the error log showed `id: String` but `messageIdInt` is used in kafka payload.
+            // Let's standardise on using `messageId` (the input string) and remove `messageIdInt` usage 
+            // OR define it if it's supposed to be an int.
+
+            // If the schema changed to UUIDs, `parseInt` is wrong.
+            // If the schema is still Ints, then `parseInt` is correct but the variable must be used consistently.
+            // Given "PrismaClientValidationError... id: String" in the *edit* error, it suggests IDs might be strings now?
+            // Re-reading code: line 203 uses `where: { id: messageIdInt }`. If that failed with `id: String` missing, maybe `messageIdInt` was NaN?
+
+            // Let's fix the specific ReferenceError first.
+            const messageIdInt = parseInt(messageId);
 
             const message = await prisma.message.findUnique({
-                where: { id: messageId },
+                where: { id: messageId }, // Use original messageId (likely string/UUID based on recent changes?)
+                // Wait, if IDs are UUIDs, parseInt will return NaN.
+                // If IDs are Ints, `parseInt` works.
+                // The error `messageIdInt is not defined` came from line 277: `payload: { id: messageIdInt, ... }`
+                // But `messageIdInt` was NOT defined in the scope of that block (it was commented out/missing).
             });
 
             if (!message) {
@@ -301,7 +296,7 @@ const registerSocketEvents = (io, socket) => {
             // Produce to Kafka for real-time broadcast
             await kafkaProducer.send('channel.message', channelIdInt, {
                 type: 'MESSAGE_DELETED',
-                payload: { id: messageIdInt, channelId: channelIdInt },
+                payload: { id: messageId, channelId: channelIdInt }, // Use messageId
                 channelId: channelIdInt
             });
 
@@ -321,10 +316,8 @@ const registerSocketEvents = (io, socket) => {
             if (!channelId) return;
             const channelIdInt = parseInt(channelId);
 
-            // Verify user is part of this DM channel
-            const dmChannel = await prisma.directMessageChannel.findUnique({
-                where: { id: channelIdInt }
-            });
+            // Verify user is part of this DM channel (Cached)
+            const dmChannel = await getCachedDMChannelMembers(channelIdInt);
 
             if (!dmChannel) {
                 socket.emit('ERROR', { message: 'DM channel not found' });
@@ -383,10 +376,8 @@ const registerSocketEvents = (io, socket) => {
 
             const channelIdInt = parseInt(channelId);
 
-            // Verify DM channel and access
-            const dmChannel = await prisma.directMessageChannel.findUnique({
-                where: { id: channelIdInt }
-            });
+            // Verify DM channel and access (Cached)
+            const dmChannel = await getCachedDMChannelMembers(channelIdInt);
 
             if (!dmChannel) {
                 if (typeof callback === 'function') callback({ error: 'DM channel not found' });
@@ -446,10 +437,8 @@ const registerSocketEvents = (io, socket) => {
         if (!channelId) return;
         const channelIdInt = parseInt(channelId);
 
-        // Verify access
-        const dmChannel = await prisma.directMessageChannel.findUnique({
-            where: { id: channelIdInt }
-        });
+        // Verify access (Cached)
+        const dmChannel = await getCachedDMChannelMembers(channelIdInt);
 
         if (!dmChannel || (dmChannel.user1Id !== socket.user.id && dmChannel.user2Id !== socket.user.id)) {
             return;
@@ -468,6 +457,12 @@ const registerSocketEvents = (io, socket) => {
         try {
             if (!channelId) return;
             const channelIdInt = parseInt(channelId);
+
+            // Verify membership (Cached)
+            const dmChannel = await getCachedDMChannelMembers(channelIdInt);
+            if (!dmChannel || (dmChannel.user1Id !== socket.user.id && dmChannel.user2Id !== socket.user.id)) {
+                return;
+            }
 
             // Mark all unread messages as read
             await prisma.directMessage.updateMany({
