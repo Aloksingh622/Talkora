@@ -8,6 +8,7 @@ import { useNotification } from '../context/NotificationContext';
 import ServerRequests from './ServerRequests';
 import ServerSettingsModal from './ServerSettingsModal';
 import UserProfileBar from './UserProfileBar';
+import VoiceRoom from './VoiceRoom';
 
 const ChannelList = ({ serverId, server, onChannelSelect, selectedChannelId, onServerUpdate }) => {
     const [channels, setChannels] = useState([]);
@@ -15,12 +16,14 @@ const ChannelList = ({ serverId, server, onChannelSelect, selectedChannelId, onS
     const [isRequestsModalOpen, setIsRequestsModalOpen] = useState(false);
     const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
     const [newChannelName, setNewChannelName] = useState('');
+    const [newChannelType, setNewChannelType] = useState('TEXT');
     const [isServerMenuOpen, setIsServerMenuOpen] = useState(false);
     const [serverMembers, setServerMembers] = useState([]);
     const currentUser = useSelector(state => state.auth.user);
     const navigate = useNavigate();
     const socket = getSocket();
     const { showNotification } = useNotification();
+    const [activeVoiceChannel, setActiveVoiceChannel] = useState(null);
 
     // Check if current user is the owner
     const isOwner = server && currentUser && server.ownerId === currentUser.id;
@@ -73,8 +76,9 @@ const ChannelList = ({ serverId, server, onChannelSelect, selectedChannelId, onS
         e.preventDefault();
         if (!newChannelName.trim()) return;
         try {
-            await createChannel(serverId, newChannelName);
+            await createChannel(serverId, newChannelName, newChannelType);
             setNewChannelName('');
+            setNewChannelType('TEXT');
             setIsModalOpen(false);
             loadChannels();
         } catch (err) {
@@ -184,6 +188,7 @@ const ChannelList = ({ serverId, server, onChannelSelect, selectedChannelId, onS
 
             {/* Channels List */}
             <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                {/* Text Channels */}
                 <div className="flex items-center justify-between px-2 pt-4 pb-2 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider group hover:text-gray-700 dark:hover:text-gray-300 transition-colors">
                     <span>Text Channels</span>
                     {isOwner && (
@@ -191,7 +196,7 @@ const ChannelList = ({ serverId, server, onChannelSelect, selectedChannelId, onS
                     )}
                 </div>
 
-                {channels.map(channel => (
+                {channels.filter(ch => ch.type === 'TEXT').map(channel => (
                     <div
                         key={channel.id}
                         className={`flex items-center justify-between px-2 py-1.5 rounded-md cursor-pointer group transition-all duration-200 ${selectedChannelId === channel.id ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-gray-200'}`}
@@ -213,6 +218,44 @@ const ChannelList = ({ serverId, server, onChannelSelect, selectedChannelId, onS
                         )}
                     </div>
                 ))}
+
+                {/* Voice Channels */}
+                {channels.some(ch => ch.type === 'AUDIO' || ch.type === 'VIDEO') && (
+                    <>
+                        <div className="flex items-center justify-between px-2 pt-4 pb-2 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            <span>Voice Channels</span>
+                        </div>
+
+                        {channels.filter(ch => ch.type === 'AUDIO' || ch.type === 'VIDEO').map(channel => (
+                            <div
+                                key={channel.id}
+                                className={`flex items-center justify-between px-2 py-1.5 rounded-md cursor-pointer group transition-all duration-200 ${activeVoiceChannel?.id === channel.id ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-gray-200'}`}
+                            >
+                                <div className="flex items-center flex-1 min-w-0" onClick={() => setActiveVoiceChannel(channel)}>
+                                    <svg className="w-5 h-5 mr-1.5 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        {channel.type === 'VIDEO' ? (
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                        ) : (
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15.536a5 5 0 001.414 1.414m0 0a5 5 0 007.072 0m-7.072 0l7.072-7.072a5 5 0 000-7.072m0 7.072L13 13" />
+                                        )}
+                                    </svg>
+                                    <span className={`truncate font-medium ${activeVoiceChannel?.id === channel.id ? 'font-bold' : ''}`}>{channel.name}</span>
+                                </div>
+                                {isOwner && (
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); handleDeleteChannel(channel.id, channel.name); }}
+                                        className="opacity-0 group-hover:opacity-100 p-1 hover:text-rose-500 transition-opacity"
+                                        title="Delete channel"
+                                    >
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                        </svg>
+                                    </button>
+                                )}
+                            </div>
+                        ))}
+                    </>
+                )}
             </div>
 
             {/* User Info Area (Bottom) */}
@@ -239,6 +282,43 @@ const ChannelList = ({ serverId, server, onChannelSelect, selectedChannelId, onS
                                     onChange={(e) => setNewChannelName(e.target.value.toLowerCase().replace(/\s+/g, '-'))}
                                     autoFocus
                                 />
+                            </div>
+                            
+                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2 block">
+                                Channel Type
+                            </label>
+                            <div className="mb-6 grid grid-cols-3 gap-2">
+                                {['TEXT', 'AUDIO', 'VIDEO'].map(type => (
+                                    <button
+                                        key={type}
+                                        type="button"
+                                        onClick={() => setNewChannelType(type)}
+                                        className={`p-3 rounded-xl border transition-all ${
+                                            newChannelType === type
+                                                ? 'bg-rose-600 border-rose-500 text-white'
+                                                : 'bg-black/50 border-white/10 text-gray-400 hover:border-rose-500/50 hover:text-white'
+                                        }`}
+                                    >
+                                        <div className="flex flex-col items-center gap-1">
+                                            {type === 'TEXT' && (
+                                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                                                </svg>
+                                            )}
+                                            {type === 'AUDIO' && (
+                                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                                                </svg>
+                                            )}
+                                            {type === 'VIDEO' && (
+                                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                                </svg>
+                                            )}
+                                            <span className="text-xs font-semibold">{type}</span>
+                                        </div>
+                                    </button>
+                                ))}
                             </div>
                             <div className="flex justify-end gap-3">
                                 <button
@@ -277,6 +357,16 @@ const ChannelList = ({ serverId, server, onChannelSelect, selectedChannelId, onS
                     members={serverMembers}
                     onServerUpdate={loadChannels}
                     onServerDeleted={handleServerDeleted}
+                />
+            )}
+
+            {/* Voice Room Modal */}
+            {activeVoiceChannel && (
+                <VoiceRoom
+                    channelId={activeVoiceChannel.id}
+                    channelName={activeVoiceChannel.name}
+                    channelType={activeVoiceChannel.type}
+                    onLeave={() => setActiveVoiceChannel(null)}
                 />
             )}
         </div>

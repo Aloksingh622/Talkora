@@ -8,6 +8,8 @@ import { useSelector } from 'react-redux';
 import OnlineIndicator from './OnlineIndicator';
 import imageCompression from 'browser-image-compression';
 import UserProfilePopup from './UserProfilePopup';
+import IncomingCallModal from './IncomingCallModal';
+import DMCall from './DMCall';
 
 const MAX_FILE_SIZE_MB = 30;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
@@ -37,6 +39,10 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
     const [selectedUser, setSelectedUser] = useState(null);
     const [popupPosition, setPopupPosition] = useState({ x: 0, y: 0 });
     const [otherUser, setOtherUser] = useState(null); // For DMs
+
+    // Call State
+    const [activeCall, setActiveCall] = useState(null); // { type: 'audio'|'video', channelId }
+    const [incomingCall, setIncomingCall] = useState(null); // { from, type, channelId }
 
     useEffect(() => {
         if (!channelId || !serverId || channelId === 'undefined') return;
@@ -175,13 +181,85 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                 socket.on('NEW_DM', handleNewDM);
                 socket.on('TYPING_DM', handleTypingDM);
 
-                // Join DM Room
-                socket.emit('JOIN_DM', { channelId });
+                // Call event listeners (defined above)
+                const handleIncomingCall = (data) => {
+                    console.log('INCOMING_CALL received:', data);
+                    if (parseInt(data.channelId) === parseInt(channelId)) {
+                        setIncomingCall(data);
+                    }
+                };
+
+                const handleCallAnswered = (data) => {
+                    console.log('CALL_ANSWERED received:', data);
+                    if (parseInt(data.channelId) === parseInt(channelId)) {
+                        setIncomingCall(null);
+                    }
+                };
+
+                const handleCallDeclined = (data) => {
+                    console.log('CALL_DECLINED received:', data);
+                    if (parseInt(data.channelId) === parseInt(channelId)) {
+                        setActiveCall(null);
+                        alert('Call declined');
+                    }
+                };
+
+                const handleCallEnded = (data) => {
+                    console.log('CALL_ENDED received:', data);
+                    if (parseInt(data.channelId) === parseInt(channelId)) {
+                        setActiveCall(null);
+                        setIncomingCall(null);
+                    }
+                };
+
+                const handleCallCancelled = (data) => {
+                    console.log('CALL_CANCELLED received:', data);
+                    if (parseInt(data.channelId) === parseInt(channelId)) {
+                        setIncomingCall(null);
+                    }
+                };
+
+                socket.on('INCOMING_CALL', handleIncomingCall);
+                socket.on('CALL_ANSWERED', handleCallAnswered);
+                socket.on('CALL_DECLINED', handleCallDeclined);
+                socket.on('CALL_ENDED', handleCallEnded);
+                socket.on('CALL_CANCELLED', handleCallCancelled);
+
+                // Join DM Room - wait for socket to be connected
+                const joinDMRoom = () => {
+                    if (socket.connected) {
+                        console.log('[DM] Emitting JOIN_DM for channel:', channelId);
+                        socket.emit('JOIN_DM', { channelId });
+                    } else {
+                        console.log('[DM] Socket not connected yet, waiting...');
+                        socket.once('connect', () => {
+                            console.log('[DM] Socket connected! Now emitting JOIN_DM for channel:', channelId);
+                            socket.emit('JOIN_DM', { channelId });
+                        });
+                    }
+                };
+                
+                joinDMRoom();
+
+                // Handle socket reconnection for DMs
+                const handleDMReconnect = () => {
+                    console.log('[DM RECONNECT] Socket reconnected, rejoining DM:', channelId);
+                    socket.emit('JOIN_DM', { channelId });
+                };
+
+                socket.on('connect', handleDMReconnect);
+
 
                 return () => {
                     socket.off('NEW_DM', handleNewDM);
                     socket.off('TYPING_DM', handleTypingDM);
-                    socket.emit('LEAVE_DM', { channelId });
+                    socket.off('INCOMING_CALL', handleIncomingCall);
+                    socket.off('CALL_ANSWERED', handleCallAnswered);
+                    socket.off('CALL_DECLINED', handleCallDeclined);
+                    socket.off('CALL_ENDED', handleCallEnded);
+                    socket.off('CALL_CANCELLED', handleCallCancelled);
+                    socket.off('connect', handleDMReconnect);
+                    // socket.emit('LEAVE_DM', { channelId }); // Keep user in DM room for stability
                 };
 
             } else {
@@ -735,6 +813,58 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
         setSelectedUser(user);
     };
 
+    // Call Handlers
+    const handleInitiateCall = (callType) => {
+        console.log('[CALL] Initiating call:', { socket: !!socket, isDM, channelId, callType });
+        
+        if (!socket) {
+            console.error('[CALL] Socket not available');
+            alert('Connection error. Please refresh the page.');
+            return;
+        }
+        
+        if (!isDM) {
+            console.error('[CALL] Not a DM channel');
+            alert('Calls are only available in direct messages');
+            return;
+        }
+        
+        socket.emit('INITIATE_CALL', { channelId, callType }, (ack) => {
+            console.log('[CALL] INITIATE_CALL response:', ack);
+            if (ack?.success) {
+                setActiveCall({ type: callType, channelId: parseInt(channelId) });
+            } else {
+                console.error('[CALL] Failed to initiate:', ack);
+                alert(ack?.error || 'Failed to initiate call');
+            }
+        });
+    };
+
+    const handleAnswerCall = () => {
+        if (socket && incomingCall) {
+            socket.emit('ANSWER_CALL', { channelId: incomingCall.channelId }, (ack) => {
+                if (ack?.success) {
+                    setActiveCall({ type: incomingCall.callType, channelId: incomingCall.channelId });
+                    setIncomingCall(null);
+                }
+            });
+        }
+    };
+
+    const handleDeclineCall = () => {
+        if (socket && incomingCall) {
+            socket.emit('DECLINE_CALL', { channelId: incomingCall.channelId });
+            setIncomingCall(null);
+        }
+    };
+
+    const handleEndCall = () => {
+        if (socket && activeCall) {
+            socket.emit('END_CALL', { channelId: activeCall.channelId });
+            setActiveCall(null);
+        }
+    };
+
     if (!channelId) {
         return (
             <div className="flex-1 bg-white dark:bg-[#0a0a10] flex items-center justify-center text-gray-500 dark:text-gray-400">
@@ -751,6 +881,34 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                     <>
                         <span className="text-2xl text-rose-500 mr-2">@</span>
                         <span className="font-bold text-gray-900 dark:text-gray-100">{otherUser?.username || 'User'}</span>
+                        
+                        {/* Call Buttons */}
+                        <div className="ml-auto flex items-center gap-2">
+                            {activeCall ? (
+                                <span className="text-sm text-green-500 font-semibold animate-pulse">In Call</span>
+                            ) : (
+                                <>
+                                    <button
+                                        onClick={() => handleInitiateCall('audio')}
+                                        className="p-2 hover:bg-gray-200 dark:hover:bg-white/10 rounded-full transition-colors group"
+                                        title="Start Audio Call"
+                                    >
+                                        <svg className="w-5 h-5 text-gray-600 dark:text-gray-400 group-hover:text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                                        </svg>
+                                    </button>
+                                    <button
+                                        onClick={() => handleInitiateCall('video')}
+                                        className="p-2 hover:bg-gray-200 dark:hover:bg-white/10 rounded-full transition-colors group"
+                                        title="Start Video Call"
+                                    >
+                                        <svg className="w-5 h-5 text-gray-600 dark:text-gray-400 group-hover:text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                        </svg>
+                                    </button>
+                                </>
+                            )}
+                        </div>
                     </>
                 ) : (
                     <>
@@ -965,6 +1123,26 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                     position={popupPosition}
                     currentUser={currentUser}
                     onClose={() => setSelectedUser(null)}
+                />
+            )}
+
+            {/* Incoming Call Modal */}
+            {incomingCall && (
+                <IncomingCallModal
+                    caller={incomingCall.from}
+                    callType={incomingCall.callType}
+                    onAnswer={handleAnswerCall}
+                    onDecline={handleDeclineCall}
+                />
+            )}
+
+            {/* Active Call */}
+            {activeCall && (
+                <DMCall
+                    channelId={activeCall.channelId}
+                    callType={activeCall.type}
+                    otherUser={otherUser}
+                    onEnd={handleEndCall}
                 />
             )}
         </div>

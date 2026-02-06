@@ -67,6 +67,16 @@ const registerSocketEvents = (io, socket) => {
         console.log(`User ${socket.user.id} left ${roomName}`);
     });
 
+    // Note: JOIN_DM handler is defined later in the DM EVENTS section (with database verification)
+
+    // 2c. LEAVE_DM - Leave a DM room
+    socket.on('LEAVE_DM', ({ channelId }) => {
+        if (!channelId) return;
+        const dmRoom = `dm:${parseInt(channelId)}`;
+        socket.leave(dmRoom);
+        console.log(`User ${socket.user.id} left ${dmRoom}`);
+    });
+
     // 3. TYPING STATUS
     socket.on('TYPING_START', async ({ channelId }) => {
         if (!channelId) return;
@@ -317,8 +327,14 @@ const registerSocketEvents = (io, socket) => {
 
     // Join DM room
     socket.on('JOIN_DM', async ({ channelId }) => {
+        console.log('🔵 JOIN_DM event received!', { channelId, userId: socket.user?.id });
         try {
-            if (!channelId) return;
+            console.log(`[JOIN_DM] Request from user ${socket.user.id} for channel ${channelId}`);
+            
+            if (!channelId) {
+                console.log('[JOIN_DM] No channelId provided');
+                return;
+            }
             const channelIdInt = parseInt(channelId);
 
             // Verify user is part of this DM channel
@@ -327,18 +343,20 @@ const registerSocketEvents = (io, socket) => {
             });
 
             if (!dmChannel) {
+                console.log(`[JOIN_DM] DM channel ${channelIdInt} not found`);
                 socket.emit('ERROR', { message: 'DM channel not found' });
                 return;
             }
 
             if (dmChannel.user1Id !== socket.user.id && dmChannel.user2Id !== socket.user.id) {
+                console.log(`[JOIN_DM] User ${socket.user.id} not authorized for channel ${channelIdInt}`);
                 socket.emit('ERROR', { message: 'Access denied' });
                 return;
             }
 
             const roomName = `dm:${channelIdInt}`;
             socket.join(roomName);
-            console.log(`User ${socket.user.id} (${socket.user.username}) joined ${roomName}`);
+            console.log(`✅ User ${socket.user.id} (${socket.user.username}) joined ${roomName}`);
 
             socket.emit('JOINED_DM', { channelId: channelIdInt });
 
@@ -487,6 +505,140 @@ const registerSocketEvents = (io, socket) => {
 
         } catch (err) {
             console.error("Mark DM read error:", err);
+        }
+    });
+
+    // ============================================
+    // DM CALL EVENTS
+    // ============================================
+
+    // INITIATE_CALL - User starts a call
+    socket.on('INITIATE_CALL', async ({ channelId, callType }, callback) => {
+        try {
+            const channelIdInt = parseInt(channelId);
+            const userId = socket.user.id;
+
+            // Verify DM channel and get other participant
+            const dmChannel = await prisma.directMessageChannel.findUnique({
+                where: { id: channelIdInt },
+                include: {
+                    user1: { select: { id: true, username: true, avatar: true } },
+                    user2: { select: { id: true, username: true, avatar: true } }
+                }
+            });
+
+            if (!dmChannel) {
+                if (typeof callback === 'function') callback({ error: 'DM channel not found' });
+                return;
+            }
+
+            // Verify user is a participant
+            if (dmChannel.user1Id !== userId && dmChannel.user2Id !== userId) {
+                if (typeof callback === 'function') callback({ error: 'Access denied' });
+                return;
+            }
+
+            // Get other user
+            const otherUser = dmChannel.user1Id === userId ? dmChannel.user2 : dmChannel.user1;
+
+            // Send INCOMING_CALL to other user
+            io.to(`dm:${channelIdInt}`).emit('INCOMING_CALL', {
+                channelId: channelIdInt,
+                callType,
+                from: {
+                    id: socket.user.id,
+                    username: socket.user.username,
+                    avatar: socket.user.avatar
+                }
+            });
+
+            console.log(`📞 Call initiated: ${socket.user.username} → ${otherUser.username} (${callType})`);
+
+            if (typeof callback === 'function') callback({ success: true });
+
+        } catch (err) {
+            console.error('[INITIATE_CALL] Error:', err);
+            if (typeof callback === 'function') callback({ error: 'Internal server error' });
+        }
+    });
+
+    // ANSWER_CALL - User answers an incoming call
+    socket.on('ANSWER_CALL', async ({ channelId }, callback) => {
+        try {
+            const channelIdInt = parseInt(channelId);
+
+            // Broadcast to both users in the DM
+            io.to(`dm:${channelIdInt}`).emit('CALL_ANSWERED', {
+                channelId: channelIdInt
+            });
+
+            console.log(`✅ Call answered on channel ${channelIdInt}`);
+
+            if (typeof callback === 'function') callback({ success: true });
+
+        } catch (err) {
+            console.error('[ANSWER_CALL] Error:', err);
+            if (typeof callback === 'function') callback({ error: 'Internal server error' });
+        }
+    });
+
+    // DECLINE_CALL - User declines an incoming call
+    socket.on('DECLINE_CALL', async ({ channelId }, callback) => {
+        try {
+            const channelIdInt = parseInt(channelId);
+
+            // Notify the caller
+            io.to(`dm:${channelIdInt}`).emit('CALL_DECLINED', {
+                channelId: channelIdInt
+            });
+
+            console.log(`❌ Call declined on channel ${channelIdInt}`);
+
+            if (typeof callback === 'function') callback({ success: true });
+
+        } catch (err) {
+            console.error('[DECLINE_CALL] Error:', err);
+            if (typeof callback === 'function') callback({ error: 'Internal server error' });
+        }
+    });
+
+    // END_CALL - Either user ends the call
+    socket.on('END_CALL', async ({ channelId }, callback) => {
+        try {
+            const channelIdInt = parseInt(channelId);
+
+            // Notify both users
+            io.to(`dm:${channelIdInt}`).emit('CALL_ENDED', {
+                channelId: channelIdInt
+            });
+
+            console.log(`🔚 Call ended on channel ${channelIdInt}`);
+
+            if (typeof callback === 'function') callback({ success: true });
+
+        } catch (err) {
+            console.error('[END_CALL] Error:', err);
+            if (typeof callback === 'function') callback({ error: 'Internal server error' });
+        }
+    });
+
+    // CANCEL_CALL - Caller cancels before answer
+    socket.on('CANCEL_CALL', async ({ channelId }, callback) => {
+        try {
+            const channelIdInt = parseInt(channelId);
+
+            // Notify the other user
+            io.to(`dm:${channelIdInt}`).emit('CALL_CANCELLED', {
+                channelId: channelIdInt
+            });
+
+            console.log(`🚫 Call cancelled on channel ${channelIdInt}`);
+
+            if (typeof callback === 'function') callback({ success: true });
+
+        } catch (err) {
+            console.error('[CANCEL_CALL] Error:', err);
+            if (typeof callback === 'function') callback({ error: 'Internal server error' });
         }
     });
 

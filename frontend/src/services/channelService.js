@@ -1,8 +1,8 @@
 import axios_Client from "../utils/axios";
 
 // Create Channel
-export const createChannel = async (serverId, name) => {
-    const response = await axios_Client.post(`/api/servers/${serverId}/channels`, { name });
+export const createChannel = async (serverId, name, type = 'TEXT') => {
+    const response = await axios_Client.post(`/api/servers/${serverId}/channels`, { name, type });
     return response.data;
 };
 export const getChannels = async (serverId) => {

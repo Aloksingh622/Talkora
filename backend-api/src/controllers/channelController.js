@@ -2,13 +2,17 @@ const prisma = require('../utils/prisma');
 
 const createChannel = async (req, res) => {
     try {
-        const { name } = req.body;
+        const { name, type } = req.body;
         const { serverId } = req.params;
         const userId = req.user.id; // From auth middleware
 
         if (!name || name.trim() === '') {
             return res.status(400).json({ message: "Channel name is required" });
         }
+
+        // Validate channel type
+        const validTypes = ['TEXT', 'AUDIO', 'VIDEO'];
+        const channelType = type && validTypes.includes(type) ? type : 'TEXT';
 
         const serverIdInt = parseInt(serverId);
         if (isNaN(serverIdInt)) {
@@ -39,7 +43,7 @@ const createChannel = async (req, res) => {
             data: {
                 name: name.trim(),
                 serverId: serverIdInt,
-                type: 'TEXT', // Default for now
+                type: channelType,
             },
         });
 
