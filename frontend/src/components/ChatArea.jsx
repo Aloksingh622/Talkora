@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { getMessages, sendMessageREST, editMessage, deleteMessage, uploadFile } from '../services/messageService';
+import { getMessages, sendMessageREST, editMessage, deleteMessage, uploadFile, enhanceMessage, summarizeChat, askChatbot } from '../services/messageService';
 import { getDMMessages, sendDMMessage, getDMChannel } from '../services/dmService';
 import { getSocket } from '../utils/socket';
 import { getUserPresence } from '../services/presenceService';
@@ -9,8 +9,10 @@ import { fetchMessages as fetchMessagesThunk, setActiveChannel, addMessage, upda
 import OnlineIndicator from './OnlineIndicator';
 import imageCompression from 'browser-image-compression';
 import UserProfilePopup from './UserProfilePopup';
-import IncomingCallModal from './IncomingCallModal';
 import DMCall from './DMCall';
+import { Sparkles, Loader2, FileText, History, X } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 const MAX_FILE_SIZE_MB = 30;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
@@ -51,6 +53,14 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
     const isTypingRef = useRef(false);
     const [editingMessageId, setEditingMessageId] = useState(null);
     const [editContent, setEditContent] = useState('');
+    
+    // AI Features State
+    const [isEnhancing, setIsEnhancing] = useState(false);
+    const [isSummarizing, setIsSummarizing] = useState(false);
+    const [summary, setSummary] = useState(null);
+    const [showSummaryOptions, setShowSummaryOptions] = useState(false);
+    const [showMentionDropdown, setShowMentionDropdown] = useState(false);
+    const [mentionQuery, setMentionQuery] = useState('');
 
     // User Profile Popup State
     const [selectedUser, setSelectedUser] = useState(null);
@@ -59,7 +69,6 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
 
     // Call State
     const [activeCall, setActiveCall] = useState(null); // { type: 'audio'|'video', channelId }
-    const [incomingCall, setIncomingCall] = useState(null); // { from, type, channelId }
 
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
     const [messageToDelete, setMessageToDelete] = useState(null);
@@ -128,7 +137,8 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
             if (isDM) {
                 const handleNewDM = (message) => {
                     console.log('NEW_DM received:', message);
-                    if (parseInt(message.channelId) === parseInt(channelId)) {
+                    // Only process if we're in DM mode AND channelId matches
+                    if (isDM && parseInt(message.channelId) === parseInt(channelId)) {
                         dispatch(addMessage({ channelId: message.channelId, message }));
                         scrollToBottom();
                     }
@@ -172,21 +182,10 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                 socket.on('TYPING_DM', handleTypingDM);
                 socket.on('USER_UPDATED', handleUserUpdated);
 
-                // Call event listeners (defined above)
-                const handleIncomingCall = (data) => {
-                    console.log('INCOMING_CALL received:', data);
-                    if (parseInt(data.channelId) === parseInt(channelId)) {
-                        setIncomingCall(data);
-                    }
-                };
+                // Call event listeners (Only for updates to ACTIVE calls you initiated)
+                // INCOMING_CALL is now handled globally by GlobalCallManager
 
-                const handleCallAnswered = (data) => {
-                    console.log('CALL_ANSWERED received:', data);
-                    if (parseInt(data.channelId) === parseInt(channelId)) {
-                        setIncomingCall(null);
-                    }
-                };
-
+                // We still listen for ENDED/DECLINED to close our active call view if we are the caller
                 const handleCallDeclined = (data) => {
                     console.log('CALL_DECLINED received:', data);
                     if (parseInt(data.channelId) === parseInt(channelId)) {
@@ -199,22 +198,15 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                     console.log('CALL_ENDED received:', data);
                     if (parseInt(data.channelId) === parseInt(channelId)) {
                         setActiveCall(null);
-                        setIncomingCall(null);
                     }
                 };
+                
+                // Answered: If we are the caller, we might want to know it was answered?
+                // Currently initiation sets activeCall immediately on success ack.
+                // But we could update state here if needed.
 
-                const handleCallCancelled = (data) => {
-                    console.log('CALL_CANCELLED received:', data);
-                    if (parseInt(data.channelId) === parseInt(channelId)) {
-                        setIncomingCall(null);
-                    }
-                };
-
-                socket.on('INCOMING_CALL', handleIncomingCall);
-                socket.on('CALL_ANSWERED', handleCallAnswered);
                 socket.on('CALL_DECLINED', handleCallDeclined);
                 socket.on('CALL_ENDED', handleCallEnded);
-                socket.on('CALL_CANCELLED', handleCallCancelled);
 
                 // Join DM Room - wait for socket to be connected
                 const joinDMRoom = () => {
@@ -244,11 +236,11 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                 return () => {
                     socket.off('NEW_DM', handleNewDM);
                     socket.off('TYPING_DM', handleTypingDM);
-                    socket.off('INCOMING_CALL', handleIncomingCall);
-                    socket.off('CALL_ANSWERED', handleCallAnswered);
+                    // socket.off('INCOMING_CALL', handleIncomingCall); // Handled globally
+                    // socket.off('CALL_ANSWERED', handleCallAnswered);
                     socket.off('CALL_DECLINED', handleCallDeclined);
                     socket.off('CALL_ENDED', handleCallEnded);
-                    socket.off('CALL_CANCELLED', handleCallCancelled);
+                    // socket.off('CALL_CANCELLED', handleCallCancelled);
                     socket.off('USER_UPDATED', handleUserUpdated);
                     socket.off('connect', handleDMReconnect);
                     // socket.emit('LEAVE_DM', { channelId }); // Keep user in DM room for stability
@@ -258,8 +250,8 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                 // SERVER CHANNEL API
                 const handleNewMessage = (message) => {
                     console.log('NEW_MESSAGE received:', message);
-                    // Ensure message belongs to this channel
-                    if (parseInt(message.channelId) === parseInt(channelId)) {
+                    // Ensure message belongs to this channel AND we're not in DM mode
+                    if (!isDM && parseInt(message.channelId) === parseInt(channelId)) {
                         dispatch(addMessage({ channelId: message.channelId, message }));
                         scrollToBottom();
                     }
@@ -507,6 +499,38 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
         }
     };
 
+    const handleEnhance = async () => {
+        if (!input.trim() || isEnhancing) return;
+
+        try {
+            setIsEnhancing(true);
+            const response = await enhanceMessage(input);
+            if (response.enhanced) {
+                setInput(response.enhanced);
+            }
+        } catch (err) {
+            console.error("Enhancement failed:", err);
+        } finally {
+            setIsEnhancing(false);
+        }
+    };
+
+    const handleSummarize = async (type, value) => {
+        if (isSummarizing) return;
+
+        setIsSummarizing(true);
+        setShowSummaryOptions(false);
+        try {
+            const data = await summarizeChat(channelId, type, value);
+            setSummary(data.summary);
+        } catch (err) {
+            console.error("Summarize error:", err);
+            alert("Failed to summarize chat. Please try again.");
+        } finally {
+            setIsSummarizing(false);
+        }
+    };
+
     const handleSendMessage = async (e) => {
         e.preventDefault();
 
@@ -600,8 +624,10 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                     if (ack?.error) {
                         console.log("DM send failed", ack.error);
                         dispatch(deleteMessageRedux({ channelId, messageId: tempId }));
+                    } else if (ack?.status === 'OK') {
+                        // Success - remove optimistic message, real message will come via NEW_DM
+                        dispatch(deleteMessageRedux({ channelId, messageId: tempId }));
                     }
-                    // DM events will handle the update via NEW_DM
                 });
             } else {
                 socket.emit('SEND_MESSAGE', { channelId, content: contentToSend }, (ack) => {
@@ -620,10 +646,45 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                         }
                     } else if (ack?.message) {
                         // Success - replace optimistic with real message
+                        // We do this manually to ensure immediate feedback for sender
                         dispatch(deleteMessageRedux({ channelId, messageId: tempId }));
                         dispatch(addMessage({ channelId, message: ack.message }));
                     }
                 });
+            }
+        }
+
+        // --- SparkHub Chatbot Logic ---
+        if (contentToSend.toLowerCase().includes('@sparkhub')) {
+            console.log("DEBUG: @SparkHub mention detected in:", contentToSend);
+            try {
+                // Case-insensitive replacement
+                const question = contentToSend.replace(/@sparkhub/i, '').trim();
+                console.log("DEBUG: Extracted question:", question);
+
+                if (question) {
+                    console.log("DEBUG: Calling askChatbot AI service...");
+                    const response = await askChatbot(question);
+                    console.log("DEBUG: AI service response:", response);
+
+                    if (response && response.answer) {
+                        console.log("DEBUG: Scheduling AI response emission...");
+                        // Send AI response as a message from the same user (or ideally a bot user) 
+                        // For this user script, it sends as the user themselves as per original code
+                        setTimeout(() => {
+                            if (socket) {
+                                console.log("DEBUG: Emitting AI response via socket:", response.answer);
+                                if (isDM) {
+                                     socket.emit('SEND_DM', { channelId, content: response.answer });
+                                } else {
+                                     socket.emit('SEND_MESSAGE', { channelId, content: response.answer });
+                                }
+                            }
+                        }, 1000);
+                    }
+                }
+            } catch (err) {
+                console.error("DEBUG: Chatbot response failed:", err);
             }
         }
     };
@@ -665,6 +726,48 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
         setPreviewUrl(null);
         if (fileInputRef.current) fileInputRef.current.value = '';
     };
+
+    // Handle mention autocomplete
+    const handleInputChange = (e) => {
+        const value = e.target.value;
+        setInput(value);
+        handleTyping();
+
+        // Check if user typed @ at the end
+        const lastChar = value[value.length - 1];
+        const secondLastChar = value[value.length - 2];
+        
+        // Show dropdown if @ is typed (and it's either at start or after a space)
+        if (lastChar === '@' && (!secondLastChar || secondLastChar === ' ')) {
+            setShowMentionDropdown(true);
+            setMentionQuery('');
+        } else if (showMentionDropdown) {
+            // If dropdown is open, check if still in mention mode
+            const lastAtIndex = value.lastIndexOf('@');
+            if (lastAtIndex !== -1) {
+                const afterAt = value.substring(lastAtIndex + 1);
+                // Close dropdown if user typed space after @
+                if (afterAt.includes(' ')) {
+                    setShowMentionDropdown(false);
+                } else {
+                    setMentionQuery(afterAt.toLowerCase());
+                }
+            } else {
+                setShowMentionDropdown(false);
+            }
+        }
+    };
+
+    const handleMentionSelect = () => {
+        const lastAtIndex = input.lastIndexOf('@');
+        if (lastAtIndex !== -1) {
+            const beforeAt = input.substring(0, lastAtIndex);
+            const updatedInput = beforeAt + '@SparkHub ';
+            setInput(updatedInput);
+        }
+        setShowMentionDropdown(false);
+    };
+
 
     const renderMessageContent = (msg) => {
         return (
@@ -836,29 +939,48 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
         });
     };
 
-    const handleAnswerCall = () => {
-        if (socket && incomingCall) {
-            socket.emit('ANSWER_CALL', { channelId: incomingCall.channelId }, (ack) => {
-                if (ack?.success) {
-                    setActiveCall({ type: incomingCall.callType, channelId: incomingCall.channelId });
-                    setIncomingCall(null);
-                }
-            });
-        }
-    };
 
-    const handleDeclineCall = () => {
-        if (socket && incomingCall) {
-            socket.emit('DECLINE_CALL', { channelId: incomingCall.channelId });
-            setIncomingCall(null);
-        }
-    };
 
     const handleEndCall = () => {
         if (socket && activeCall) {
             socket.emit('END_CALL', { channelId: activeCall.channelId });
             setActiveCall(null);
         }
+    };
+
+    // Components for ReactMarkdown to handle styling
+    const MarkdownComponents = {
+        p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+        ul: ({ children }) => <ul className="list-disc ml-4 mb-2">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal ml-4 mb-2">{children}</ol>,
+        li: ({ children }) => <li className="mb-1">{children}</li>,
+        h1: ({ children }) => <h1 className="text-xl font-bold mb-2">{children}</h1>,
+        h2: ({ children }) => <h2 className="text-lg font-bold mb-2">{children}</h2>,
+        h3: ({ children }) => <h3 className="text-md font-bold mb-2">{children}</h3>,
+        code: ({ children }) => <code className="bg-gray-100 dark:bg-[#1e1f22] px-1 rounded text-rose-500">{children}</code>,
+        strong: ({ children }) => <strong className="font-bold text-gray-900 dark:text-white">{children}</strong>,
+    };
+
+    // Function to highlight @SparkHub
+    const renderTextWithMentions = (text) => {
+        if (!text) return null;
+        const parts = text.split(/(@SparkHub)/i);
+        return parts.map((part, i) =>
+            part.toLowerCase() === '@sparkhub' ? (
+                <span key={i} className="bg-indigo-500/20 text-indigo-500 px-1 rounded font-semibold cursor-pointer hover:bg-indigo-500/30 transition-colors">
+                    {part}
+                </span>
+            ) : (
+                <span key={i} className="inline markdown-content">
+                    <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={MarkdownComponents}
+                    >
+                        {part}
+                    </ReactMarkdown>
+                </span>
+            )
+        );
     };
 
     if (!channelId) {
@@ -881,18 +1003,53 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                         {/* Call Buttons */}
                         <div className="ml-auto flex items-center gap-2">
                             {activeCall ? (
-                                <span className="text-sm text-green-500 font-semibold animate-pulse">In Call</span>
-                            ) : (
-                                <>
-                                    <button
-                                        onClick={() => handleInitiateCall('audio')}
-                                        className="p-2 hover:bg-gray-200 dark:hover:bg-white/10 rounded-full transition-colors group"
-                                        title="Start Audio Call"
-                                    >
-                                        <svg className="w-5 h-5 text-gray-600 dark:text-gray-400 group-hover:text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-                                        </svg>
-                                    </button>
+                        <span className="text-sm text-green-500 font-semibold animate-pulse">In Call</span>
+                    ) : (
+                        <>
+                            {/* AI Summarize Feature */}
+                            <div className="relative">
+                                <button
+                                    onClick={() => setShowSummaryOptions(!showSummaryOptions)}
+                                    className="p-2 hover:bg-gray-100 dark:hover:bg-white/5 rounded-full text-indigo-500 transition-all flex items-center gap-1"
+                                    title="Summarize Chat"
+                                >
+                                    {isSummarizing ? (
+                                        <Loader2 className="w-5 h-5 animate-spin" />
+                                    ) : (
+                                        <FileText className="w-5 h-5" />
+                                    )}
+                                </button>
+
+                                {showSummaryOptions && (
+                                    <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-[#1e1f22] border border-gray-200 dark:border-white/10 rounded-lg shadow-xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2">
+                                        <div className="p-2 text-xs font-bold text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-white/10 px-3">
+                                            Summarize last...
+                                        </div>
+                                        <button onClick={() => handleSummarize('count', 50)} className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-indigo-500 hover:text-white transition-colors flex items-center gap-2">
+                                            <History className="w-4 h-4" /> 50 Messages
+                                        </button>
+                                        <button onClick={() => handleSummarize('count', 100)} className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-indigo-500 hover:text-white transition-colors flex items-center gap-2">
+                                            <History className="w-4 h-4" /> 100 Messages
+                                        </button>
+                                        <button onClick={() => handleSummarize('time', 1)} className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-indigo-500 hover:text-white transition-colors flex items-center gap-2">
+                                            <History className="w-4 h-4" /> 1 Hour
+                                        </button>
+                                        <button onClick={() => handleSummarize('time', 2)} className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-indigo-500 hover:text-white transition-colors flex items-center gap-2">
+                                            <History className="w-4 h-4" /> 2 Hours
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+
+                            <button
+                                onClick={() => handleInitiateCall('audio')}
+                                className="p-2 hover:bg-gray-200 dark:hover:bg-white/10 rounded-full transition-colors group"
+                                title="Start Audio Call"
+                            >
+                                <svg className="w-5 h-5 text-gray-600 dark:text-gray-400 group-hover:text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                                </svg>
+                            </button>
                                     <button
                                         onClick={() => handleInitiateCall('video')}
                                         className="p-2 hover:bg-gray-200 dark:hover:bg-white/10 rounded-full transition-colors group"
@@ -913,6 +1070,41 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                     </>
                 )}
             </div>
+
+            {/* Summary Modal overlay */}
+            {summary && (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setSummary(null)}>
+                    <div className="bg-white dark:bg-[#2b2d31] w-full max-w-lg rounded-xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                        <div className="bg-indigo-600 p-4 flex items-center justify-between text-white">
+                            <div className="flex items-center gap-2">
+                                <FileText className="w-5 h-5" />
+                                <h3 className="font-bold">Chat Summary</h3>
+                            </div>
+                            <button onClick={() => setSummary(null)} className="p-1 hover:bg-white/20 rounded-full transition-colors">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="p-6">
+                            <div className="prose dark:prose-invert max-w-none text-gray-700 dark:text-gray-300 text-sm leading-relaxed max-h-96 overflow-y-auto custom-scrollbar">
+                                <ReactMarkdown
+                                    remarkPlugins={[remarkGfm]}
+                                    components={MarkdownComponents}
+                                >
+                                    {summary}
+                                </ReactMarkdown>
+                            </div>
+                        </div>
+                        <div className="p-4 bg-gray-50 dark:bg-black/20 border-t border-gray-200 dark:border-white/5 flex justify-end">
+                            <button
+                                onClick={() => setSummary(null)}
+                                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold text-sm transition-all shadow-lg shadow-indigo-500/20"
+                            >
+                                Got it
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Messages */}
             <div className="flex-1 overflow-y-auto p-4 flex flex-col-reverse custom-scrollbar">
@@ -1090,17 +1282,50 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                         <button type="button" onClick={() => fileInputRef.current?.click()} className="w-6 h-6 rounded-full bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 mr-3 flex items-center justify-center hover:bg-rose-500 hover:text-white transition-all">
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
                         </button>
-                        <input
-                            type="text"
-                            className="flex-1 bg-transparent border-none outline-none text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-500 font-medium"
-                            placeholder={`Message ${isDM ? '@' + (otherUser?.displayName || otherUser?.username || 'User') : '#' + (channelName || 'channel')}`}
-                            value={input}
-                            onChange={(e) => {
-                                setInput(e.target.value);
-                                handleTyping();
-                            }}
-                        />
+                        <div className="flex-1 relative">
+                            <input
+                                type="text"
+                                className="w-full bg-transparent border-none outline-none text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-500 font-medium"
+                                placeholder={`Message ${isDM ? '@' + (otherUser?.displayName || otherUser?.username || 'User') : '#' + (channelName || 'channel')}`}
+                                value={input}
+                                onChange={handleInputChange}
+                            />
+                            
+                            {/* Mention Autocomplete Dropdown */}
+                            {showMentionDropdown && 'sparkhub'.includes(mentionQuery) && (
+                                <div className="absolute bottom-full left-0 mb-2 w-48 bg-white dark:bg-[#1e1f22] border border-gray-200 dark:border-white/10 rounded-lg shadow-xl z-50 overflow-hidden">
+                                    <button
+                                        onClick={handleMentionSelect}
+                                        className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-indigo-500 hover:text-white transition-colors flex items-center gap-2"
+                                    >
+                                        <Sparkles className="w-4 h-4 text-indigo-500" />
+                                        <span className="font-semibold">SparkHub</span>
+                                        <span className="text-xs opacity-70 ml-auto">AI Assistant</span>
+                                    </button>
+                                </div>
+                            )}
+                        </div>
                         <div className="flex items-center space-x-2 ml-2">
+                            {/* AI Enhance Button */}
+                            {input.trim() && (
+                                <button
+                                    type="button"
+                                    onClick={handleEnhance}
+                                    disabled={isEnhancing}
+                                    className={`p-2 rounded-full transition-all flex items-center justify-center ${isEnhancing
+                                        ? 'bg-indigo-500/20 text-indigo-500 animate-pulse'
+                                        : 'text-indigo-500 hover:bg-indigo-500/10'
+                                        }`}
+                                    title="Enhance with AI"
+                                >
+                                    {isEnhancing ? (
+                                        <Loader2 className="w-5 h-5 animate-spin" />
+                                    ) : (
+                                        <Sparkles className="w-5 h-5" />
+                                    )}
+                                </button>
+                            )}
+                            
                             {/* Send icon shows when input has text */}
                             <button
                                 type="submit"
@@ -1123,15 +1348,7 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                 />
             )}
 
-            {/* Incoming Call Modal */}
-            {incomingCall && (
-                <IncomingCallModal
-                    caller={incomingCall.from}
-                    callType={incomingCall.callType}
-                    onAnswer={handleAnswerCall}
-                    onDecline={handleDeclineCall}
-                />
-            )}
+
 
             {/* Active Call */}
             {activeCall && (

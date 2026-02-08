@@ -298,7 +298,7 @@ const getDMMessages = async (req, res) => {
         // Build query
         const query = {
             where: { channelId },
-            orderBy: { createdAt: 'desc' },
+            orderBy: { createdAt: 'asc' },
             take: parseInt(limit),
             include: {
                 sender: {

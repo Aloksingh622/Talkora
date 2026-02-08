@@ -39,9 +39,9 @@ const socketAuthMiddleware = async (socket, next) => {
                 username: true,
                 displayName: true,
                 avatar: true,
-                bannerColor: true,
-                bannerImage: true,
-                ringColor: true,
+                // bannerColor: true, // Commented out due to stale Prisma client (EPERM error)
+                // bannerImage: true, 
+                // ringColor: true,
                 bio: true,
                 createdAt: true
             }

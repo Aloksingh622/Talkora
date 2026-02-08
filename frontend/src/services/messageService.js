@@ -49,3 +49,21 @@ export const deleteMessage = async (channelId, messageId) => {
     const response = await axios_Client.delete(`/api/channels/${channelId}/messages/${messageId}`);
     return response.data;
 };
+
+// AI Enhance Message
+export const enhanceMessage = async (content) => {
+    const response = await axios_Client.post('/api/ai/enhance', { content });
+    return response.data;
+};
+
+// AI Summarize Chat
+export const summarizeChat = async (channelId, type, value) => {
+    const response = await axios_Client.post(`/api/ai/summarize/${channelId}`, { type, value });
+    return response.data;
+};
+
+// AI Ask Chatbot
+export const askChatbot = async (question) => {
+    const response = await axios_Client.post('/api/ai/ask', { question });
+    return response.data;
+};

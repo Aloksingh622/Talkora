@@ -32,6 +32,8 @@ const ServerRouter = require('./routes/serverRoutes');
 app.use('/api/servers', ServerRouter);
 const ChannelRouter = require('./routes/channelRoutes');
 app.use('/api/channels', ChannelRouter);
+const aiRoutes = require('./routes/aiRoutes');
+app.use('/api/ai', aiRoutes);
 const MessageRouter = require('./routes/messageRoutes');
 app.use('/api', MessageRouter); // Mount at /api so routes are /api/channels/:id/messages
 const PresenceRouter = require('./routes/presenceRoutes');

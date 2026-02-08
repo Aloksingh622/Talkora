@@ -674,6 +674,132 @@ const registerSocketEvents = (io, socket) => {
         }
     });
 
+    // 10. CALL SIGNALING (WebRTC / LiveKit Notification)
+    socket.on('INITIATE_CALL', async (payload, callback) => {
+        try {
+            const { channelId, callType } = payload;
+            if (!channelId) return;
+            const channelIdInt = parseInt(channelId);
+
+            // Verify DM channel access
+            const dmChannel = await prisma.directMessageChannel.findUnique({
+                where: { id: channelIdInt }
+            });
+
+            if (!dmChannel || (dmChannel.user1Id !== socket.user.id && dmChannel.user2Id !== socket.user.id)) {
+                if (typeof callback === 'function') callback({ error: 'Access denied' });
+                return;
+            }
+
+            // Identify the recipient
+            const recipientId = (dmChannel.user1Id === socket.user.id) ? dmChannel.user2Id : dmChannel.user1Id;
+
+            // Broadcast to the RECIPIENT'S personal room `user:{recipientId}`
+            console.log(`[CALL] User ${socket.user.username} initiating ${callType} call to user ${recipientId} in DM ${channelIdInt}`);
+            
+            socket.to(`user:${recipientId}`).emit('INCOMING_CALL', {
+                channelId: channelIdInt,
+                from: {
+                    id: socket.user.id,
+                    username: socket.user.username,
+                    displayName: socket.user.displayName,
+                    avatar: socket.user.avatar
+                },
+                callType
+            });
+            
+            if (typeof callback === 'function') callback({ success: true });
+
+        } catch (err) {
+            console.error("Initiate call error:", err);
+            if (typeof callback === 'function') callback({ error: 'Internal server error' });
+        }
+    });
+
+    socket.on('ANSWER_CALL', async (payload, callback) => {
+        const { channelId } = payload;
+        if (!channelId) return;
+        const channelIdInt = parseInt(channelId);
+        
+        console.log(`[CALL] User ${socket.user.username} answered call in DM ${channelIdInt}`);
+        
+        // Notify DM room (legacy/backup)
+        socket.to(`dm:${channelIdInt}`).emit('CALL_ANSWERED', { 
+            channelId: channelIdInt,
+            by: socket.user.id 
+        });
+
+        // Also notify via Personal Rooms (robustness)
+        try {
+            const dmChannel = await prisma.directMessageChannel.findUnique({
+                where: { id: channelIdInt }
+            });
+            if (dmChannel) {
+                const otherUserId = (dmChannel.user1Id === socket.user.id) ? dmChannel.user2Id : dmChannel.user1Id;
+                socket.to(`user:${otherUserId}`).emit('CALL_ANSWERED', { 
+                    channelId: channelIdInt,
+                    by: socket.user.id 
+                });
+            }
+        } catch (e) { console.error("Error notifying personal room for ANSWER:", e); }
+
+        if (typeof callback === 'function') callback({ success: true });
+    });
+
+    socket.on('DECLINE_CALL', async (payload) => {
+        const { channelId } = payload;
+        if (!channelId) return;
+        const channelIdInt = parseInt(channelId);
+
+        console.log(`[CALL] User ${socket.user.username} declined call in DM ${channelIdInt}`);
+        
+        socket.to(`dm:${channelIdInt}`).emit('CALL_DECLINED', { 
+            channelId: channelIdInt,
+            by: socket.user.id 
+        });
+
+        // Notify Personal Room
+        try {
+            const dmChannel = await prisma.directMessageChannel.findUnique({
+                where: { id: channelIdInt }
+            });
+            if (dmChannel) {
+                const otherUserId = (dmChannel.user1Id === socket.user.id) ? dmChannel.user2Id : dmChannel.user1Id;
+                socket.to(`user:${otherUserId}`).emit('CALL_DECLINED', { 
+                    channelId: channelIdInt,
+                    by: socket.user.id 
+                });
+            }
+        } catch (e) { console.error("Error notifying personal room for DECLINE:", e); }
+    });
+
+    socket.on('END_CALL', async (payload) => {
+        const { channelId } = payload;
+        if (!channelId) return;
+        const channelIdInt = parseInt(channelId);
+
+        console.log(`[CALL] User ${socket.user.username} ended call in DM ${channelIdInt}`);
+        
+        socket.to(`dm:${channelIdInt}`).emit('CALL_ENDED', { 
+            channelId: channelIdInt,
+            by: socket.user.id 
+        });
+
+        // Notify Personal Rooms (Both participants ideally, to be safe)
+        try {
+            const dmChannel = await prisma.directMessageChannel.findUnique({
+                where: { id: channelIdInt }
+            });
+            if (dmChannel) {
+                const otherUserId = (dmChannel.user1Id === socket.user.id) ? dmChannel.user2Id : dmChannel.user1Id;
+                socket.to(`user:${otherUserId}`).emit('CALL_ENDED', { 
+                    channelId: channelIdInt,
+                    by: socket.user.id 
+                });
+            }
+        } catch (e) { console.error("Error notifying personal room for END:", e); }
+    });
+
     // 9. DISCONNECT - Clean up user presence
     socket.on('disconnect', async (reason) => {
         try {

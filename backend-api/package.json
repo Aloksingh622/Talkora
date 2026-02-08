@@ -17,6 +17,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@prisma/adapter-pg": "^6.0.0",
     "@prisma/client": "^6.0.0",
     "@sendgrid/mail": "^8.1.6",

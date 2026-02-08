@@ -11,6 +11,7 @@ import { NotificationProvider } from './context/NotificationContext';
 
 import { useDispatch, useSelector } from "react-redux";
 import { check_auth } from "./redux/auth_slice";
+import GlobalCallManager from './components/GlobalCallManager';
 
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
@@ -63,6 +64,7 @@ function App() {
             },
           }}
         />
+        <GlobalCallManager />
         <Routes>
           <Route path="/" element={<Landingpage />} />
           <Route
