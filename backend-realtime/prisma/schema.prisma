@@ -40,6 +40,10 @@ model User {
   password     String
   dateOfBirth  DateTime?
   avatar       String?
+  bannerColor  String?
+  bannerImage  String?
+  ringColor    String?
+  bio          String?
   role         Role      @default(user)
   firebase_uid String?
   createdAt    DateTime  @default(now())
@@ -80,6 +84,7 @@ model Server {
 
   members      ServerMember[]
   channels     Channel[]
+  categories   Category[]
   joinRequests JoinRequest[]
 
   // Member management relations
@@ -87,6 +92,18 @@ model Server {
   timeouts  Timeout[]
   roles     ServerRole2[]
   auditLogs AuditLog[]
+}
+
+model Category {
+  id        Int       @id @default(autoincrement())
+  name      String
+  serverId  Int
+  server    Server    @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  channels  Channel[]
+  order     Int       @default(0)
+  createdAt DateTime  @default(now())
+
+  @@index([serverId])
 }
 
 model Channel {
@@ -97,6 +114,8 @@ model Channel {
   createdAt DateTime    @default(now())
 
   server   Server    @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  categoryId Int?
+  category   Category?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   messages Message[]
 
   @@unique([serverId, name])

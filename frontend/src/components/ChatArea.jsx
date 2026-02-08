@@ -4,17 +4,36 @@ import { getDMMessages, sendDMMessage, getDMChannel } from '../services/dmServic
 import { getSocket } from '../utils/socket';
 import { getUserPresence } from '../services/presenceService';
 import { getMyMemberStatus } from '../services/memberService';
-import { useSelector } from 'react-redux';
+import { useSelector, useDispatch } from 'react-redux';
+import { fetchMessages as fetchMessagesThunk, setActiveChannel, addMessage, updateMessage, deleteMessage as deleteMessageRedux } from '../redux/message_slice';
 import OnlineIndicator from './OnlineIndicator';
 import imageCompression from 'browser-image-compression';
 import UserProfilePopup from './UserProfilePopup';
+import IncomingCallModal from './IncomingCallModal';
+import DMCall from './DMCall';
 
 const MAX_FILE_SIZE_MB = 30;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 const ChatArea = ({ channelId, channelName, serverId }) => {
     const isDM = serverId === '@me'; // Check if it's a DM
-    const [messages, setMessages] = useState([]);
+    const dispatch = useDispatch();
+
+    // Redux selectors for messages
+    const messageData = useSelector(state => state.message.messages[channelId]);
+    const messages = messageData?.messages || [];
+
+    useEffect(() => {
+        console.log('[ChatArea] messageData updated:', {
+            count: messages.length,
+            lastMsg: messages[0]?.content,
+            channelId
+        });
+    }, [messages, channelId]);
+
+    const loading = messageData?.loading || false;
+    const error = messageData?.error || null;
+
     const [input, setInput] = useState('');
     const [typingUser, setTypingUser] = useState(null);
     const [userPresence, setUserPresence] = useState({}); // {userId: {online: bool, lastSeen: timestamp}}
@@ -38,10 +57,17 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
     const [popupPosition, setPopupPosition] = useState({ x: 0, y: 0 });
     const [otherUser, setOtherUser] = useState(null); // For DMs
 
+    // Call State
+    const [activeCall, setActiveCall] = useState(null); // { type: 'audio'|'video', channelId }
+    const [incomingCall, setIncomingCall] = useState(null); // { from, type, channelId }
+
+    const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+    const [messageToDelete, setMessageToDelete] = useState(null);
+
     useEffect(() => {
         if (!channelId || !serverId || channelId === 'undefined') return;
 
-        fetchMessages();
+        fetchMessagesLocal();
         if (isDM) {
             fetchDMInfo();
         } else {
@@ -57,51 +83,9 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
 
                 // Ensure message belongs to this channel
                 if (parseInt(message.channelId) === parseInt(channelId)) {
-                    console.log('✅ channelId validation passed, updating messages...');
-                    setMessages(prev => {
-                        console.log('setMessages called, prev.length:', prev.length);
-                        // Check if this exact message already exists (by ID)
-                        const existsById = prev.some(msg => msg.id === message.id);
-                        if (existsById) {
-                            console.log('⚠️ Message already exists (by ID), skipping');
-                            return prev; // Already have this message
-                        }
-
-                        // Check if we have a pending optimistic message from the same user with same content
-                        // If so, replace it with the real message
-                        const optimisticIndex = prev.findIndex(msg =>
-                            msg.pending &&
-                            msg.user?.id === message.user?.id &&
-                            (msg.content || '') === (message.content || '') &&
-                            (msg.fileName || null) === (message.fileName || null) &&
-                            Math.abs(new Date(msg.createdAt) - new Date(message.createdAt)) < 5000 // Within 5 seconds
-                        );
-
-                        if (optimisticIndex !== -1) {
-                            console.log('🔄 Replacing optimistic message at index:', optimisticIndex);
-                            // Replace optimistic message with real one
-                            const newMessages = [...prev];
-                            newMessages[optimisticIndex] = message;
-                            return newMessages;
-                        }
-
-                        // Additional check: prevent duplicate if ANY message (pending or not) 
-                        // from same user with same content exists within 2 seconds
-                        const hasDuplicate = prev.some(msg =>
-                            msg.user?.id === message.user?.id &&
-                            (msg.content || '') === (message.content || '') &&
-                            Math.abs(new Date(msg.createdAt) - new Date(message.createdAt)) < 2000
-                        );
-
-                        if (hasDuplicate) {
-                            console.log('⚠️ Duplicate message detected (same content/user/time), skipping');
-                            return prev;
-                        }
-
-                        // New message from another user or no optimistic match
-                        console.log('✨ Adding new message to state');
-                        return [message, ...prev];
-                    });
+                    console.log('✅ channelId validation passed, dispatching addMessage...');
+                    // Redux handles: duplicate checking, optimistic replacement, size pruning, unread counts
+                    dispatch(addMessage({ channelId: message.channelId, message }));
                     scrollToBottom();
                 } else {
                     console.log('❌ channelId validation FAILED, message not for this channel');
@@ -122,14 +106,21 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
             const handleMessageEdited = (message) => {
                 console.log('MESSAGE_EDITED received:', message);
                 if (parseInt(message.channelId) === parseInt(channelId)) {
-                    setMessages(prev => prev.map(msg => msg.id === message.id ? message : msg));
+                    dispatch(updateMessage({
+                        channelId: message.channelId,
+                        messageId: message.id,
+                        updates: message
+                    }));
                 }
             };
 
             const handleMessageDeleted = (data) => {
                 console.log('MESSAGE_DELETED received:', data);
                 if (parseInt(data.channelId) === parseInt(channelId)) {
-                    setMessages(prev => prev.filter(msg => msg.id !== data.id));
+                    dispatch(deleteMessageRedux({
+                        channelId: data.channelId,
+                        messageId: data.id
+                    }));
                 }
             };
 
@@ -138,24 +129,7 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                 const handleNewDM = (message) => {
                     console.log('NEW_DM received:', message);
                     if (parseInt(message.channelId) === parseInt(channelId)) {
-                        setMessages(prev => {
-                            const existsById = prev.some(msg => msg.id === message.id);
-                            if (existsById) return prev;
-
-                            // Optimistic replace logic similar to server messages
-                            const optimisticIndex = prev.findIndex(msg =>
-                                msg.pending &&
-                                (msg.content || '') === (message.content || '') &&
-                                Math.abs(new Date(msg.createdAt) - new Date(message.createdAt)) < 5000
-                            );
-
-                            if (optimisticIndex !== -1) {
-                                const newMessages = [...prev];
-                                newMessages[optimisticIndex] = message;
-                                return newMessages;
-                            }
-                            return [message, ...prev];
-                        });
+                        dispatch(addMessage({ channelId: message.channelId, message }));
                         scrollToBottom();
                     }
                 };
@@ -172,16 +146,112 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                 // DM doesn't have explicit STOP event in backend provided in snippet, 
                 // but TYPING_DM is broadcast. We can just show it for a few seconds.
 
+                const handleUserUpdated = (updatedUser) => {
+                    // Update messages in Redux cache to reflect updated user info
+                    if (messages.length > 0) {
+                        messages.forEach(msg => {
+                            if (msg.sender?.id === updatedUser.id || msg.receiver?.id === updatedUser.id) {
+                                const updatedMsg = { ...msg };
+                                if (msg.sender?.id === updatedUser.id) {
+                                    updatedMsg.sender = { ...msg.sender, ...updatedUser };
+                                }
+                                if (msg.receiver?.id === updatedUser.id) {
+                                    updatedMsg.receiver = { ...msg.receiver, ...updatedUser };
+                                }
+                                dispatch(updateMessage({
+                                    channelId,
+                                    messageId: msg.id,
+                                    updates: updatedMsg
+                                }));
+                            }
+                        });
+                    }
+                };
+
                 socket.on('NEW_DM', handleNewDM);
                 socket.on('TYPING_DM', handleTypingDM);
+                socket.on('USER_UPDATED', handleUserUpdated);
 
-                // Join DM Room
-                socket.emit('JOIN_DM', { channelId });
+                // Call event listeners (defined above)
+                const handleIncomingCall = (data) => {
+                    console.log('INCOMING_CALL received:', data);
+                    if (parseInt(data.channelId) === parseInt(channelId)) {
+                        setIncomingCall(data);
+                    }
+                };
+
+                const handleCallAnswered = (data) => {
+                    console.log('CALL_ANSWERED received:', data);
+                    if (parseInt(data.channelId) === parseInt(channelId)) {
+                        setIncomingCall(null);
+                    }
+                };
+
+                const handleCallDeclined = (data) => {
+                    console.log('CALL_DECLINED received:', data);
+                    if (parseInt(data.channelId) === parseInt(channelId)) {
+                        setActiveCall(null);
+                        alert('Call declined');
+                    }
+                };
+
+                const handleCallEnded = (data) => {
+                    console.log('CALL_ENDED received:', data);
+                    if (parseInt(data.channelId) === parseInt(channelId)) {
+                        setActiveCall(null);
+                        setIncomingCall(null);
+                    }
+                };
+
+                const handleCallCancelled = (data) => {
+                    console.log('CALL_CANCELLED received:', data);
+                    if (parseInt(data.channelId) === parseInt(channelId)) {
+                        setIncomingCall(null);
+                    }
+                };
+
+                socket.on('INCOMING_CALL', handleIncomingCall);
+                socket.on('CALL_ANSWERED', handleCallAnswered);
+                socket.on('CALL_DECLINED', handleCallDeclined);
+                socket.on('CALL_ENDED', handleCallEnded);
+                socket.on('CALL_CANCELLED', handleCallCancelled);
+
+                // Join DM Room - wait for socket to be connected
+                const joinDMRoom = () => {
+                    if (socket.connected) {
+                        console.log('[DM] Emitting JOIN_DM for channel:', channelId);
+                        socket.emit('JOIN_DM', { channelId });
+                    } else {
+                        console.log('[DM] Socket not connected yet, waiting...');
+                        socket.once('connect', () => {
+                            console.log('[DM] Socket connected! Now emitting JOIN_DM for channel:', channelId);
+                            socket.emit('JOIN_DM', { channelId });
+                        });
+                    }
+                };
+
+                joinDMRoom();
+
+                // Handle socket reconnection for DMs
+                const handleDMReconnect = () => {
+                    console.log('[DM RECONNECT] Socket reconnected, rejoining DM:', channelId);
+                    socket.emit('JOIN_DM', { channelId });
+                };
+
+                socket.on('connect', handleDMReconnect);
+
 
                 return () => {
                     socket.off('NEW_DM', handleNewDM);
                     socket.off('TYPING_DM', handleTypingDM);
-                    socket.emit('LEAVE_DM', { channelId });
+                    socket.off('INCOMING_CALL', handleIncomingCall);
+                    socket.off('CALL_ANSWERED', handleCallAnswered);
+                    socket.off('CALL_DECLINED', handleCallDeclined);
+                    socket.off('CALL_ENDED', handleCallEnded);
+                    socket.off('CALL_CANCELLED', handleCallCancelled);
+                    socket.off('USER_UPDATED', handleUserUpdated);
+                    socket.off('connect', handleDMReconnect);
+                    // socket.emit('LEAVE_DM', { channelId }); // Keep user in DM room for stability
                 };
 
             } else {
@@ -190,49 +260,7 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                     console.log('NEW_MESSAGE received:', message);
                     // Ensure message belongs to this channel
                     if (parseInt(message.channelId) === parseInt(channelId)) {
-                        setMessages(prev => {
-                            // Check if this exact message already exists (by ID)
-                            const existsById = prev.some(msg => msg.id === message.id);
-                            if (existsById) {
-                                console.log('⚠️ Message already exists (by ID), skipping');
-                                return prev; // Already have this message
-                            }
-
-                            // Check if we have a pending optimistic message from the same user with same content
-                            // If so, replace it with the real message
-                            const optimisticIndex = prev.findIndex(msg =>
-                                msg.pending &&
-                                msg.user?.id === message.user?.id &&
-                                (msg.content || '') === (message.content || '') &&
-                                (msg.fileName || null) === (message.fileName || null) &&
-                                Math.abs(new Date(msg.createdAt) - new Date(message.createdAt)) < 5000 // Within 5 seconds
-                            );
-
-                            if (optimisticIndex !== -1) {
-                                console.log('🔄 Replacing optimistic message at index:', optimisticIndex);
-                                // Replace optimistic message with real one
-                                const newMessages = [...prev];
-                                newMessages[optimisticIndex] = message;
-                                return newMessages;
-                            }
-
-                            // Additional check: prevent duplicate if ANY message from same user 
-                            // with same content exists within 2 seconds
-                            const hasDuplicate = prev.some(msg =>
-                                msg.user?.id === message.user?.id &&
-                                (msg.content || '') === (message.content || '') &&
-                                Math.abs(new Date(msg.createdAt) - new Date(message.createdAt)) < 2000
-                            );
-
-                            if (hasDuplicate) {
-                                console.log('⚠️ Duplicate message detected (same content/user/time), skipping');
-                                return prev;
-                            }
-
-                            // New message from another user or no optimistic match
-                            console.log('✨ Adding new message to state');
-                            return [message, ...prev];
-                        });
+                        dispatch(addMessage({ channelId: message.channelId, message }));
                         scrollToBottom();
                     }
                 };
@@ -252,14 +280,36 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                 const handleMessageEdited = (message) => {
                     console.log('MESSAGE_EDITED received:', message);
                     if (parseInt(message.channelId) === parseInt(channelId)) {
-                        setMessages(prev => prev.map(msg => msg.id === message.id ? message : msg));
+                        dispatch(updateMessage({
+                            channelId: message.channelId,
+                            messageId: message.id,
+                            updates: message
+                        }));
                     }
                 };
 
                 const handleMessageDeleted = (data) => {
                     console.log('MESSAGE_DELETED received:', data);
                     if (parseInt(data.channelId) === parseInt(channelId)) {
-                        setMessages(prev => prev.filter(msg => msg.id !== data.id));
+                        dispatch(deleteMessageRedux({
+                            channelId: data.channelId,
+                            messageId: data.id
+                        }));
+                    }
+                };
+
+                const handleUserUpdated = (updatedUser) => {
+                    // Update messages in Redux cache
+                    if (messages.length > 0) {
+                        messages.forEach(msg => {
+                            if (msg.user?.id === updatedUser.id) {
+                                dispatch(updateMessage({
+                                    channelId,
+                                    messageId: msg.id,
+                                    updates: { ...msg, user: { ...msg.user, ...updatedUser } }
+                                }));
+                            }
+                        });
                     }
                 };
 
@@ -269,6 +319,7 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                 socket.on('TYPING_STOP', handleTypingStop);
                 socket.on('MESSAGE_EDITED', handleMessageEdited);
                 socket.on('MESSAGE_DELETED', handleMessageDeleted);
+                socket.on('USER_UPDATED', handleUserUpdated);
 
                 // Join channel - wait for socket to be connected
                 console.log('Preparing to join channel:', channelId, 'Socket connected:', socket.connected);
@@ -362,6 +413,7 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                     socket.off('TYPING_STOP', handleTypingStop);
                     socket.off('MESSAGE_EDITED', handleMessageEdited);
                     socket.off('MESSAGE_DELETED', handleMessageDeleted);
+                    socket.off('USER_UPDATED', handleUserUpdated);
                     socket.off('JOINED_CHANNEL', handleJoinedChannel);
                     socket.off('MEMBER_BANNED', handleMemberBanned);
                     socket.off('MEMBER_UNBANNED', handleMemberUnbanned);
@@ -374,6 +426,11 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
             }
         }
     }, [channelId, serverId, currentUserBanned, currentUser, socket, isDM]);
+
+    // DEBUG: Monitor currentUser changes
+    useEffect(() => {
+        console.log('DEBUG: currentUser updated in ChatArea:', currentUser);
+    }, [currentUser]);
 
     const fetchBanAndTimeoutStatus = async () => {
         if (!serverId) return;
@@ -392,21 +449,33 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
         }
     };
 
-    const fetchMessages = async () => {
-        try {
-            let data;
-            if (isDM) {
-                // Fetch DM messages
-                data = await getDMMessages(channelId);
-            } else {
-                // Fetch Server messages
-                data = await getMessages(channelId);
-            }
+    const fetchMessagesLocal = async () => {
+        // Set active channel for LRU tracking
+        dispatch(setActiveChannel(channelId));
 
-            setMessages(data.messages || []);
+        // Check if cached and fresh (less than 5 minutes old)
+        const cached = messageData;
+        const now = Date.now();
+        const lastFetched = cached?.lastFetched || 0;
+        const age = now - lastFetched;
+        // Increased to 5 minutes (300000ms) as requested
+        const isFresh = cached && lastFetched && (age < 300000);
 
-            // Fetch presence for unique users in messages
-            const uniqueUserIds = [...new Set(data.messages?.map(m => {
+        console.log(`[Frontend] Channel ${channelId} Refresh check:`, {
+            hasCached: !!cached,
+            lastFetched: new Date(lastFetched).toLocaleTimeString(),
+            age: `${(age / 1000).toFixed(1)}s`,
+            isFresh
+        });
+
+        if (!cached || !isFresh) {
+            // Dispatch Redux thunk to fetch messages
+            dispatch(fetchMessagesThunk({ channelId, isDM }));
+        }
+
+        // Fetch presence for users (after messages load)
+        if (messages.length > 0) {
+            const uniqueUserIds = [...new Set(messages.map(m => {
                 // For DMs, messages have 'sender' field, for channels they have 'user'
                 const userId = isDM ? m.sender?.id : m.user?.id;
                 return userId;
@@ -414,8 +483,6 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
             uniqueUserIds.forEach(userId => {
                 if (userId) fetchUserPresence(userId);
             });
-        } catch (err) {
-            console.error("Failed to load messages", err);
         }
     };
 
@@ -480,7 +547,8 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
             user: {
                 id: currentUser?.id || 'unknown',
                 username: currentUser?.username || 'You',
-                avatar: currentUser?.avatar || null
+                avatar: currentUser?.avatar || null,
+                displayName: currentUser?.displayName // Add displayName to optimistic message
             },
             pending: true, // Flag to show it's being sent
             fileUrl: previewUrl, // Local preview
@@ -488,8 +556,9 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
             fileName: fileToSend ? fileToSend.name : null
         };
 
-        // Add optimistically to UI
-        setMessages(prev => [optimisticMessage, ...prev]);
+        // Add optimistically to UI via Redux
+        console.log('📤 Adding optimistic message:', { tempId, content: optimisticMessage.content, pending: optimisticMessage.pending });
+        dispatch(addMessage({ channelId, message: optimisticMessage }));
         scrollToBottom();
 
         if (fileToSend) {
@@ -508,20 +577,19 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                 }, (ack) => {
                     if (ack?.error) {
                         console.error("Msg failed", ack.error);
-                        setMessages(prev => prev.filter(msg => msg.id !== tempId));
-                        // Error handling logic
+                        dispatch(deleteMessageRedux({ channelId, messageId: tempId }));
                     } else if (ack?.message) {
-                        // Success - replace optimistic message
-                        setMessages(prev => prev.map(msg =>
-                            msg.id === tempId ? ack.message : msg
-                        ));
+                        // Success - replace optimistic with real message
+                        // We do this manually to ensure immediate feedback for sender
+                        dispatch(deleteMessageRedux({ channelId, messageId: tempId }));
+                        dispatch(addMessage({ channelId, message: ack.message }));
                     }
                 });
 
             } catch (err) {
                 console.error("Upload failed", err);
-                // Remove optimistic message
-                setMessages(prev => prev.filter(msg => msg.id !== tempId));
+                // Remove optimistic message via Redux
+                dispatch(deleteMessageRedux({ channelId, messageId: tempId }));
                 alert('File upload failed');
             }
         } else if (socket) {
@@ -531,7 +599,7 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                 socket.emit('SEND_DM', { channelId, content: contentToSend }, (ack) => {
                     if (ack?.error) {
                         console.log("DM send failed", ack.error);
-                        setMessages(prev => prev.filter(msg => msg.id !== tempId));
+                        dispatch(deleteMessageRedux({ channelId, messageId: tempId }));
                     }
                     // DM events will handle the update via NEW_DM
                 });
@@ -539,8 +607,8 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                 socket.emit('SEND_MESSAGE', { channelId, content: contentToSend }, (ack) => {
                     if (ack?.error) {
                         console.error("Msg failed", ack.error);
-                        // Remove optimistic message
-                        setMessages(prev => prev.filter(msg => msg.id !== tempId));
+                        // Remove optimistic message via Redux
+                        dispatch(deleteMessageRedux({ channelId, messageId: tempId }));
 
                         // Check if error is ban or timeout
                         if (ack.error?.toLowerCase().includes('banned')) {
@@ -551,10 +619,9 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                             setInput(contentToSend);
                         }
                     } else if (ack?.message) {
-                        // Success
-                        setMessages(prev => prev.map(msg =>
-                            msg.id === tempId ? ack.message : msg
-                        ));
+                        // Success - replace optimistic with real message
+                        dispatch(deleteMessageRedux({ channelId, messageId: tempId }));
+                        dispatch(addMessage({ channelId, message: ack.message }));
                     }
                 });
             }
@@ -640,12 +707,12 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
     const handleEditMessage = async (messageId) => {
         if (!editContent.trim()) return;
 
-        // Optimistic update
-        setMessages(prev => prev.map(msg =>
-            msg.id === messageId
-                ? { ...msg, content: editContent.trim(), editedAt: new Date().toISOString() }
-                : msg
-        ));
+        // Optimistic update via Redux
+        dispatch(updateMessage({
+            channelId,
+            messageId,
+            updates: { content: editContent.trim(), editedAt: new Date().toISOString() }
+        }));
         setEditingMessageId(null);
         setEditContent('');
 
@@ -659,31 +726,38 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                 if (ack?.error) {
                     console.error("Edit failed", ack.error);
                     alert("Failed to edit message");
-                    fetchMessages(); // Revert
+                    fetchMessagesLocal(); // Revert
                 }
             });
         }
     };
 
-    const handleDeleteMessage = async (messageId) => {
-        if (!window.confirm('Are you sure you want to delete this message?')) return;
+    const handleDeleteMessageClick = (msg) => {
+        setMessageToDelete(msg);
+        setIsDeleteModalOpen(true);
+    };
 
-        // Optimistic update
-        setMessages(prev => prev.filter(msg => msg.id !== messageId));
+    const confirmDeleteMessage = async () => {
+        if (!messageToDelete) return;
+
+        // Optimistic update via Redux
+        dispatch(deleteMessageRedux({ channelId, messageId: messageToDelete.id }));
 
         // Send to server via Socket
         if (socket) {
             socket.emit('DELETE_MESSAGE', {
                 channelId,
-                messageId
+                messageId: messageToDelete.id
             }, (ack) => {
                 if (ack?.error) {
                     console.error("Delete failed", ack.error);
                     alert("Failed to delete message");
-                    fetchMessages(); // Revert
+                    fetchMessagesLocal(); // Revert
                 }
             });
         }
+        setIsDeleteModalOpen(false);
+        setMessageToDelete(null);
     };
 
     const startEdit = (msg) => {
@@ -735,6 +809,58 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
         setSelectedUser(user);
     };
 
+    // Call Handlers
+    const handleInitiateCall = (callType) => {
+        console.log('[CALL] Initiating call:', { socket: !!socket, isDM, channelId, callType });
+
+        if (!socket) {
+            console.error('[CALL] Socket not available');
+            alert('Connection error. Please refresh the page.');
+            return;
+        }
+
+        if (!isDM) {
+            console.error('[CALL] Not a DM channel');
+            alert('Calls are only available in direct messages');
+            return;
+        }
+
+        socket.emit('INITIATE_CALL', { channelId, callType }, (ack) => {
+            console.log('[CALL] INITIATE_CALL response:', ack);
+            if (ack?.success) {
+                setActiveCall({ type: callType, channelId: parseInt(channelId) });
+            } else {
+                console.error('[CALL] Failed to initiate:', ack);
+                alert(ack?.error || 'Failed to initiate call');
+            }
+        });
+    };
+
+    const handleAnswerCall = () => {
+        if (socket && incomingCall) {
+            socket.emit('ANSWER_CALL', { channelId: incomingCall.channelId }, (ack) => {
+                if (ack?.success) {
+                    setActiveCall({ type: incomingCall.callType, channelId: incomingCall.channelId });
+                    setIncomingCall(null);
+                }
+            });
+        }
+    };
+
+    const handleDeclineCall = () => {
+        if (socket && incomingCall) {
+            socket.emit('DECLINE_CALL', { channelId: incomingCall.channelId });
+            setIncomingCall(null);
+        }
+    };
+
+    const handleEndCall = () => {
+        if (socket && activeCall) {
+            socket.emit('END_CALL', { channelId: activeCall.channelId });
+            setActiveCall(null);
+        }
+    };
+
     if (!channelId) {
         return (
             <div className="flex-1 bg-white dark:bg-[#0a0a10] flex items-center justify-center text-gray-500 dark:text-gray-400">
@@ -750,7 +876,35 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                 {isDM ? (
                     <>
                         <span className="text-2xl text-rose-500 mr-2">@</span>
-                        <span className="font-bold text-gray-900 dark:text-gray-100">{otherUser?.username || 'User'}</span>
+                        <span className="font-bold text-gray-900 dark:text-gray-100">{otherUser?.displayName || otherUser?.username || 'User'}</span>
+
+                        {/* Call Buttons */}
+                        <div className="ml-auto flex items-center gap-2">
+                            {activeCall ? (
+                                <span className="text-sm text-green-500 font-semibold animate-pulse">In Call</span>
+                            ) : (
+                                <>
+                                    <button
+                                        onClick={() => handleInitiateCall('audio')}
+                                        className="p-2 hover:bg-gray-200 dark:hover:bg-white/10 rounded-full transition-colors group"
+                                        title="Start Audio Call"
+                                    >
+                                        <svg className="w-5 h-5 text-gray-600 dark:text-gray-400 group-hover:text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                                        </svg>
+                                    </button>
+                                    <button
+                                        onClick={() => handleInitiateCall('video')}
+                                        className="p-2 hover:bg-gray-200 dark:hover:bg-white/10 rounded-full transition-colors group"
+                                        title="Start Video Call"
+                                    >
+                                        <svg className="w-5 h-5 text-gray-600 dark:text-gray-400 group-hover:text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                        </svg>
+                                    </button>
+                                </>
+                            )}
+                        </div>
                     </>
                 ) : (
                     <>
@@ -785,7 +939,8 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                                             }`}
                                         onClick={(e) => handleUserClick(e, msgUser)}
                                     >
-                                        {msgUser?.username}
+                                        {msgUser?.displayName || msgUser?.username}
+                                        {msgUser?.id === currentUser?.id && <span className="text-gray-500 dark:text-gray-400 text-xs ml-1 font-normal">(You)</span>}
                                     </span>
                                     {bannedUsers.has(msgUser?.id) && (
                                         <span className="text-xs text-red-500 dark:text-red-400 font-bold mr-2">(Banned)</span>
@@ -842,7 +997,7 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                                     </button>
                                     <button
-                                        onClick={() => handleDeleteMessage(msg.id)}
+                                        onClick={() => handleDeleteMessageClick(msg)}
                                         className="p-1.5 bg-gray-200 dark:bg-[#2b2d31] hover:bg-red-500 dark:hover:bg-red-600 hover:text-white rounded text-gray-600 dark:text-gray-400 transition-colors"
                                         title="Delete message"
                                     >
@@ -938,7 +1093,7 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                         <input
                             type="text"
                             className="flex-1 bg-transparent border-none outline-none text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-500 font-medium"
-                            placeholder={`Message #${channelName || 'channel'}`}
+                            placeholder={`Message ${isDM ? '@' + (otherUser?.displayName || otherUser?.username || 'User') : '#' + (channelName || 'channel')}`}
                             value={input}
                             onChange={(e) => {
                                 setInput(e.target.value);
@@ -966,6 +1121,58 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                     currentUser={currentUser}
                     onClose={() => setSelectedUser(null)}
                 />
+            )}
+
+            {/* Incoming Call Modal */}
+            {incomingCall && (
+                <IncomingCallModal
+                    caller={incomingCall.from}
+                    callType={incomingCall.callType}
+                    onAnswer={handleAnswerCall}
+                    onDecline={handleDeclineCall}
+                />
+            )}
+
+            {/* Active Call */}
+            {activeCall && (
+                <DMCall
+                    channelId={activeCall.channelId}
+                    callType={activeCall.type}
+                    otherUser={otherUser}
+                    onEnd={handleEndCall}
+                />
+            )}
+
+            {/* Delete Message Confirmation Modal */}
+            {isDeleteModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                    <div className="bg-white dark:bg-[#313338] rounded-md shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                        <div className="p-6">
+                            <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100 mb-2">Delete Message</h2>
+                            <p className="text-gray-600 dark:text-gray-300 text-sm mb-6">
+                                Are you sure you want to delete this message?
+                                <br /><br />
+                                <div className="p-3 bg-gray-100 dark:bg-[#2b2d31] rounded-md border border-gray-200 dark:border-white/5 text-xs italic text-gray-500 dark:text-gray-400 line-clamp-3 break-all">
+                                    "{messageToDelete?.content || (messageToDelete?.fileUrl ? '[Attachment]' : '')}"
+                                </div>
+                            </p>
+                            <div className="flex justify-end space-x-2 bg-gray-100 dark:bg-[#2b2d31] p-4 -m-6 mt-0">
+                                <button
+                                    onClick={() => setIsDeleteModalOpen(false)}
+                                    className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:underline transition-all"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={confirmDeleteMessage}
+                                    className="px-6 py-2 bg-rose-500 hover:bg-rose-600 text-white rounded text-sm font-bold transition-colors shadow-sm"
+                                >
+                                    Delete
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

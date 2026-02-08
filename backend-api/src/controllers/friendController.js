@@ -76,7 +76,12 @@ const sendFriendRequest = async (req, res) => {
                         id: true,
                         username: true,
                         displayName: true,
-                        avatar: true
+                        avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 },
                 addressee: {
@@ -84,7 +89,12 @@ const sendFriendRequest = async (req, res) => {
                         id: true,
                         username: true,
                         displayName: true,
-                        avatar: true
+                        avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 }
             }
@@ -124,7 +134,12 @@ const acceptFriendRequest = async (req, res) => {
                         id: true,
                         username: true,
                         displayName: true,
-                        avatar: true
+                        avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 },
                 addressee: {
@@ -132,7 +147,12 @@ const acceptFriendRequest = async (req, res) => {
                         id: true,
                         username: true,
                         displayName: true,
-                        avatar: true
+                        avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 }
             }
@@ -161,7 +181,12 @@ const acceptFriendRequest = async (req, res) => {
                         id: true,
                         username: true,
                         displayName: true,
-                        avatar: true
+                        avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 },
                 addressee: {
@@ -169,7 +194,12 @@ const acceptFriendRequest = async (req, res) => {
                         id: true,
                         username: true,
                         displayName: true,
-                        avatar: true
+                        avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 }
             }
@@ -235,6 +265,9 @@ const rejectOrRemoveFriend = async (req, res) => {
     }
 };
 
+// Import getPresence at the top
+const { getPresence } = require('../redis/presence');
+
 /**
  * Get all friends (accepted friendships)
  * GET /api/friends
@@ -258,7 +291,12 @@ const getFriends = async (req, res) => {
                         id: true,
                         username: true,
                         displayName: true,
-                        avatar: true
+                        avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 },
                 addressee: {
@@ -266,7 +304,12 @@ const getFriends = async (req, res) => {
                         id: true,
                         username: true,
                         displayName: true,
-                        avatar: true
+                        avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 }
             },
@@ -275,18 +318,23 @@ const getFriends = async (req, res) => {
             }
         });
 
-        // Transform to simple friend list
-        const friends = friendships.map(friendship => {
+        // Transform to simple friend list with Presence
+        const friends = await Promise.all(friendships.map(async (friendship) => {
             const friend = friendship.requesterId === userId
                 ? friendship.addressee
                 : friendship.requester;
 
+            // Fetch presence from Redis
+            const presence = await getPresence(friend.id);
+
             return {
                 friendshipId: friendship.id,
                 ...friend,
+                online: presence.online,
+                lastSeen: presence.lastSeen,
                 friendsSince: friendship.createdAt
             };
-        });
+        }));
 
         res.status(200).json({ friends });
     } catch (error) {
@@ -315,7 +363,12 @@ const getPendingRequests = async (req, res) => {
                         id: true,
                         username: true,
                         displayName: true,
-                        avatar: true
+                        avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 }
             },
@@ -336,7 +389,12 @@ const getPendingRequests = async (req, res) => {
                         id: true,
                         username: true,
                         displayName: true,
-                        avatar: true
+                        avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 }
             },
@@ -355,10 +413,94 @@ const getPendingRequests = async (req, res) => {
     }
 };
 
+/**
+ * Search users by username or displayName
+ * GET /api/friends/search?query=xxx
+ */
+const searchUsers = async (req, res) => {
+    try {
+        const currentUserId = req.user.id;
+        const { query } = req.query;
+
+        // Validation: minimum 2 characters
+        if (!query || query.trim().length < 2) {
+            return res.status(400).json({ message: 'Search query must be at least 2 characters' });
+        }
+
+        const searchTerm = query.trim();
+
+        // Search users by username or displayName (case-insensitive)
+        const users = await prisma.user.findMany({
+            where: {
+                AND: [
+                    { id: { not: currentUserId } }, // Exclude current user
+                    {
+                        OR: [
+                            { username: { contains: searchTerm, mode: 'insensitive' } },
+                            { displayName: { contains: searchTerm, mode: 'insensitive' } }
+                        ]
+                    }
+                ]
+            },
+            select: {
+                id: true,
+                username: true,
+                displayName: true,
+                avatar: true
+            },
+            take: 10 // Limit to 10 results
+        });
+
+        // Get friendship statuses for each user
+        const friendships = await prisma.friendship.findMany({
+            where: {
+                OR: [
+                    { requesterId: currentUserId, addresseeId: { in: users.map(u => u.id) } },
+                    { addresseeId: currentUserId, requesterId: { in: users.map(u => u.id) } }
+                ]
+            }
+        });
+
+        console.log('Search query:', searchTerm, '| Found users:', users.length, users.map(u => u.username));
+
+        // Map users with their friendship status
+        const usersWithStatus = users.map(user => {
+            const friendship = friendships.find(
+                f => (f.requesterId === currentUserId && f.addresseeId === user.id) ||
+                    (f.addresseeId === currentUserId && f.requesterId === user.id)
+            );
+
+            let friendshipStatus = 'none';
+            if (friendship) {
+                if (friendship.status === 'ACCEPTED') {
+                    friendshipStatus = 'friends';
+                } else if (friendship.status === 'PENDING') {
+                    friendshipStatus = friendship.requesterId === currentUserId
+                        ? 'pending_outgoing'
+                        : 'pending_incoming';
+                }
+            }
+
+            return {
+                ...user,
+                friendshipStatus
+            };
+        });
+
+        console.log('Returning users with status:', usersWithStatus.length);
+        res.json({ users: usersWithStatus });
+
+    } catch (error) {
+        console.error('Search users error:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
 module.exports = {
     sendFriendRequest,
     acceptFriendRequest,
     rejectOrRemoveFriend,
     getFriends,
-    getPendingRequests
+    getPendingRequests,
+    searchUsers
 };

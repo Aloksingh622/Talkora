@@ -3,6 +3,7 @@ import Landingpage from './pages/landingPage'
 import Login from './pages/login'
 import Signup from './pages/signup'
 import InvitePage from './pages/InvitePage'
+import ChangePassword from './pages/ChangePassword'
 import { BrowserRouter, Routes, Route, Navigate } from "react-router";
 import { Toaster } from 'react-hot-toast';
 import ChatPage from './pages/ChatPage'
@@ -73,8 +74,15 @@ function App() {
             }
           />
           <Route path="/login" element={<Login />} />
-          <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
+          <Route
+            path="/change-password"
+            element={
+              <ProtectedRoute>
+                <ChangePassword />
+              </ProtectedRoute>
+            }
+          />
           <Route path="/invite/:code" element={<InvitePage />} />
         </Routes>
       </BrowserRouter>

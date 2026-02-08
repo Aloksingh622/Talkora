@@ -4,6 +4,7 @@ const usermiddleware = require('../middlewares/Auth.js');
 const {
     createServer,
     getMyServers,
+    getUserServersProfile,
     searchServers,
     joinServer,
     leaveServer,
@@ -39,6 +40,7 @@ const upload = require('../middlewares/multer.middleware');
 // Server CRUD
 ServerRouter.post('/', usermiddleware, upload.single('icon'), createServer);
 ServerRouter.get('/', usermiddleware, getMyServers);
+ServerRouter.get('/my-servers', usermiddleware, getUserServersProfile);
 ServerRouter.get('/search', usermiddleware, searchServers);
 ServerRouter.post('/:id/join', usermiddleware, joinServer);
 ServerRouter.post('/:id/leave', usermiddleware, leaveServer);

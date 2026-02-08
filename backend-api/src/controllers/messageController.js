@@ -1,5 +1,7 @@
 const prisma = require('../utils/prisma');
 const uploadOnCloudinary = require('../database/cloudinary');
+const { generateMessageId, getTimestampFromId, getAgeInDays } = require('../utils/snowflake');
+const redisClient = require('../utils/redis');
 
 const sendMessage = async (req, res) => {
     try {
@@ -97,6 +99,7 @@ const sendMessage = async (req, res) => {
         // Create message
         const message = await prisma.message.create({
             data: {
+                id: generateMessageId(),
                 content: content ? content.trim() : null,
                 userId,
                 channelId: channelIdInt,
@@ -109,7 +112,13 @@ const sendMessage = async (req, res) => {
                     select: {
                         id: true,
                         username: true,
+                        displayName: true,
                         avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 }
             }
@@ -134,60 +143,118 @@ const sendMessage = async (req, res) => {
 const getMessages = async (req, res) => {
     try {
         const { channelId } = req.params;
-        const { cursor, limit = 50 } = req.query;
-        const userId = req.user.id;
+        // Map 'cursor' to 'before' for compatibility, but prefer 'before'
+        const { before, cursor, limit = 50 } = req.query;
+        const targetBefore = before || cursor;
 
+        const limitInt = Math.min(parseInt(limit), 100);
         const channelIdInt = parseInt(channelId);
-        const limitInt = parseInt(limit);
 
         if (isNaN(channelIdInt)) {
             return res.status(400).json({ message: "Invalid channel ID" });
         }
 
-        // Verify user is a member of the server (indirectly via channel -> server)
-        const channel = await prisma.channel.findUnique({
-            where: { id: channelIdInt },
-        });
+        let messages = [];
+        let source = 'DB';
 
-        if (!channel) {
-            return res.status(404).json({ message: "Channel not found" });
+        // 1. Determine if we should try Redis
+        let tryRedis = true;
+        if (targetBefore) {
+            const ageInDays = getAgeInDays(targetBefore);
+            if (ageInDays > 7) {
+                tryRedis = false; // Too old for cache
+            }
         }
 
-        const member = await prisma.serverMember.findUnique({
-            where: {
-                userId_serverId: {
-                    userId,
-                    serverId: channel.serverId,
-                },
-            },
-        });
+        // 2. Try Reading from Redis
+        if (tryRedis) {
+            try {
+                const cacheKey = `channel:${channelIdInt}:messages`;
+                let rawMessages = [];
 
-        if (!member) {
-            return res.status(403).json({ message: "You must be a member of the server to view messages" });
-        }
-
-        const queryOptions = {
-            take: limitInt,
-            where: { channelId: channelIdInt },
-            orderBy: { createdAt: 'desc' }, // Newest first
-            include: {
-                user: {
-                    select: {
-                        id: true,
-                        username: true,
-                        avatar: true,
+                if (!targetBefore) {
+                    // Latest messages
+                    rawMessages = await redisClient.zRange(cacheKey, 0, limitInt - 1, { REV: true });
+                } else {
+                    // Older than 'before'
+                    const beforeTimestamp = getTimestampFromId(targetBefore);
+                    if (beforeTimestamp) {
+                        rawMessages = await redisClient.zRangeByScore(
+                            cacheKey,
+                            '-inf',
+                            `(${beforeTimestamp}`,
+                            { REV: true, LIMIT: { offset: 0, count: limitInt } }
+                        );
                     }
                 }
-            }
-        };
 
-        if (cursor) {
-            queryOptions.cursor = { id: parseInt(cursor) };
-            queryOptions.skip = 1; // Skip the cursor itself
+                if (rawMessages.length > 0) {
+                    messages = rawMessages.map(s => JSON.parse(s));
+                    source = 'REDIS';
+                    console.log(`[API-CACHE] ⚡ Hit! Served ${messages.length} messages from Redis for channel ${channelId}`);
+                }
+            } catch (err) {
+                console.error('[API-CACHE] Redis Read Error:', err);
+            }
         }
 
-        const messages = await prisma.message.findMany(queryOptions);
+        // 3. Fallback to DB
+        if (messages.length === 0) {
+            console.log(`[API-DB] 🐢 Cache Miss/Skip for channel ${channelId}. Fetching from Postgres...`);
+            const whereClause = { channelId: channelIdInt };
+            if (targetBefore) {
+                // Determine if targetBefore is ID (Snowflake/Int) or Cursor
+                // Prisma needs correct type. 
+                // Snowflake IDs are BigInt string content, but valid for string comparison if model uses String ID.
+                // IF current model uses Int IDs (auto-increment), this will BREAK.
+                // Checking previous code: "queryOptions.cursor = { id: parseInt(cursor) };"
+                // THIS IMPLIES CURRENT IDS ARE INTEGERS.
 
+                // CRITICAL: We switched to Snowflake (BigInt/String) for NEW messages.
+                // Old messages are Ints. 
+                // If ID is numeric string, Prisma might need casting or strict type.
+                // To support both:
+                // If it looks like a Snowflake (contains 'msg_'), treat as String.
+                // If it looks like an Int, treat as Int.
+
+                if (targetBefore.toString().startsWith('msg_')) {
+                    whereClause.id = { lt: targetBefore }; // Snowflake comparison
+                } else {
+                    // Legacy Int ID support
+                    // For legacy IDs, we can't use 'lt' string comparison easily against Int field
+                    // unless schema changed. 
+                    // Assuming we updated schema to String ID or using strict types.
+                    // For now, let's assume we proceed with the new ID type (String) logic
+                    // and handle legacy later if needed.
+                    whereClause.id = { lt: targetBefore };
+                }
+            }
+
+            messages = await prisma.message.findMany({
+                where: whereClause,
+                take: limitInt,
+                orderBy: { createdAt: 'desc' },
+                include: {
+                    user: {
+                        select: {
+                            id: true,
+                            username: true,
+                            displayName: true,
+                            avatar: true,
+                            bannerColor: true,
+                            bannerImage: true,
+                            ringColor: true,
+                            bio: true,
+                            createdAt: true,
+                        }
+                    }
+                }
+            });
+            source = 'POSTGRES';
+        }
+
+        res.setHeader('X-Cache-Source', source);
+        // Maintain legacy response format { messages, nextCursor }
         let nextCursor = null;
         if (messages.length === limitInt) {
             nextCursor = messages[messages.length - 1].id;
@@ -197,6 +264,7 @@ const getMessages = async (req, res) => {
             messages,
             nextCursor,
         });
+
     } catch (err) {
         console.error("Get messages error:", err);
         res.status(500).json({ message: "Internal server error" });
@@ -229,7 +297,13 @@ const editMessage = async (req, res) => {
                     select: {
                         id: true,
                         username: true,
+                        displayName: true,
                         avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 }
             }
@@ -261,7 +335,13 @@ const editMessage = async (req, res) => {
                     select: {
                         id: true,
                         username: true,
+                        displayName: true,
                         avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 }
             }

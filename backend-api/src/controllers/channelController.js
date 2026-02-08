@@ -2,7 +2,8 @@ const prisma = require('../utils/prisma');
 
 const createChannel = async (req, res) => {
     try {
-        const { name } = req.body;
+        const { name, type, categoryId } = req.body;
+        console.log('[CreateChannel] Request Body:', req.body);
         const { serverId } = req.params;
         const userId = req.user.id; // From auth middleware
 
@@ -10,10 +11,32 @@ const createChannel = async (req, res) => {
             return res.status(400).json({ message: "Channel name is required" });
         }
 
+        // Validate channel type
+        const validTypes = ['TEXT', 'AUDIO', 'VIDEO'];
+        const channelType = type && validTypes.includes(type) ? type : 'TEXT';
+
         const serverIdInt = parseInt(serverId);
         if (isNaN(serverIdInt)) {
             return res.status(400).json({ message: "Invalid server ID" });
         }
+
+        // Validate categoryId if provided
+        let validCategoryId = null;
+        if (categoryId) {
+            const categoryIdInt = parseInt(categoryId);
+            console.log('[CreateChannel] categoryIdInt:', categoryIdInt);
+            if (!isNaN(categoryIdInt)) {
+                // Verify category belongs to this server
+                const category = await prisma.category.findFirst({
+                    where: { id: categoryIdInt, serverId: serverIdInt }
+                });
+                console.log('[CreateChannel] Found Category:', category);
+                if (category) {
+                    validCategoryId = categoryIdInt;
+                }
+            }
+        }
+        console.log('[CreateChannel] Final validCategoryId:', validCategoryId);
 
         // Check if user is OWNER or ADMIN of the server
         const member = await prisma.serverMember.findUnique({
@@ -39,7 +62,8 @@ const createChannel = async (req, res) => {
             data: {
                 name: name.trim(),
                 serverId: serverIdInt,
-                type: 'TEXT', // Default for now
+                type: channelType,
+                categoryId: validCategoryId
             },
         });
 

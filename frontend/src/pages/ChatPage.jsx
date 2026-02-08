@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import { useSelector } from 'react-redux';
+import { useSelector, useDispatch } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import ServerSidebar from '../components/ServerSidebar';
 import ChannelList from '../components/ChannelList';
@@ -9,23 +9,29 @@ import MemberList from '../components/MemberList';
 import DMList from '../components/DMList'; // Import DMList
 import FriendsHome from '../components/FriendsHome'; // Import FriendsHome
 import { initSocket, disconnectSocket, getSocket } from '../utils/socket';
-import { getMyServers } from '../services/serverService';
 import { useNotification } from '../context/NotificationContext';
 import sparkHubLogo from '../assets/sparkhub.png';
 import mainLogo from '../assets/logo.png';
+import VoiceRoom from '../components/VoiceRoom';
+import { fetchMyServers, removeServer, setCurrentServer, setCurrentChannel } from '../redux/server_slice';
 
 const ChatPage = () => {
     const { serverId, channelId } = useParams();
     const navigate = useNavigate();
+    const dispatch = useDispatch();
     const { user } = useSelector((state) => state.auth);
+    const { servers, serversLoading } = useSelector((state) => state.server);
     const [channelName, setChannelName] = useState('');
-    const [currentServer, setCurrentServer] = useState(null);
-    const [servers, setServers] = useState([]);
+    const [currentServer, setCurrentServerLocal] = useState(null);
     const { showNotification } = useNotification();
+    const [activeVoiceChannel, setActiveVoiceChannel] = useState(null);
 
     useEffect(() => {
         initSocket();
-        loadServers();
+        // Load servers from Redux if not already loaded
+        if (servers.length === 0 && !serversLoading) {
+            dispatch(fetchMyServers());
+        }
         return () => disconnectSocket();
     }, []);
 
@@ -42,7 +48,7 @@ const ChatPage = () => {
         if (socket) {
             const handleServerDeleted = (data) => {
                 showNotification(`Server "${data.serverName}" has been deleted by the owner`, 'warning');
-                setServers(prev => prev.filter(s => s.id !== data.serverId));
+                dispatch(removeServer(data.serverId));
                 if (parseInt(serverId) === data.serverId) {
                     navigate('/channels');
                 }
@@ -50,30 +56,35 @@ const ChatPage = () => {
             socket.on('SERVER_DELETED', handleServerDeleted);
             return () => socket.off('SERVER_DELETED', handleServerDeleted);
         }
-    }, [serverId, navigate, showNotification]);
+    }, [serverId, navigate, showNotification, dispatch]);
 
     // Update current server when serverId changes
     useEffect(() => {
         if (serverId && servers.length > 0) {
             const server = servers.find(s => s.id === parseInt(serverId));
-            setCurrentServer(server || null);
+            setCurrentServerLocal(server || null);
+            dispatch(setCurrentServer(serverId ? parseInt(serverId) : null));
         } else {
-            setCurrentServer(null);
+            setCurrentServerLocal(null);
+            dispatch(setCurrentServer(null));
         }
-    }, [serverId, servers]);
+    }, [serverId, servers, dispatch]);
 
-    const loadServers = async () => {
-        try {
-            const data = await getMyServers();
-            setServers(data.servers || []);
-        } catch (err) {
-            console.error("Failed to load servers", err);
-        }
-    };
+    // Update current channel in Redux
+    useEffect(() => {
+        dispatch(setCurrentChannel(channelId ? parseInt(channelId) : null));
+    }, [channelId, dispatch]);
 
     const handleServerSelect = (id) => navigate(`/channels/${id}`);
     const handleChannelSelect = (id) => navigate(`/channels/${serverId}/${id}`);
-    const handleServerUpdate = () => loadServers();
+    const handleServerUpdate = () => dispatch(fetchMyServers());
+
+    const handleVoiceSelect = (channel) => {
+        setActiveVoiceChannel(channel);
+        // Clear text channel selection if needed, or keep it to allow returning
+        // We'll prioritize showing VoiceRoom if set
+    };
+
 
     return (
         <div className="flex w-full h-screen overflow-hidden bg-[#F3F4F6] dark:bg-[#0a0a10] transition-colors duration-300 relative">
@@ -96,6 +107,9 @@ const ChatPage = () => {
                     onChannelSelect={handleChannelSelect}
                     selectedChannelId={channelId ? parseInt(channelId) : null}
                     onServerUpdate={handleServerUpdate}
+                    onVoiceSelect={handleVoiceSelect}
+                    activeVoiceChannelId={activeVoiceChannel?.id}
+                    onChannelNameChange={setChannelName}
                 />
             ) : (
                 <div className="hidden md:block w-72 bg-[#F9FAFB] dark:bg-[#111116] border-r border-gray-200 dark:border-white/5 h-full relative overflow-hidden">
@@ -109,6 +123,14 @@ const ChatPage = () => {
                 {serverId === '@me' && !channelId ? (
                     /* FRIENDS HOME VIEW */
                     <FriendsHome />
+                ) : activeVoiceChannel ? (
+                    /* VOICE ROOM VIEW (Replaces Chat/Friends Area) */
+                    <VoiceRoom
+                        channelId={activeVoiceChannel.id}
+                        channelName={activeVoiceChannel.name}
+                        channelType={activeVoiceChannel.type}
+                        onLeave={() => setActiveVoiceChannel(null)}
+                    />
                 ) : channelId ? (
                     <>
                         <ChatArea channelId={channelId} channelName={channelName} serverId={serverId} />

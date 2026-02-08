@@ -42,6 +42,10 @@ const DMRouter = require('./routes/dmRoutes');
 app.use('/api/dm', DMRouter);
 const UploadRouter = require('./routes/uploadRoutes');
 app.use('/api/upload', UploadRouter);
+const LiveKitRouter = require('./routes/livekitRoutes');
+app.use('/api/livekit', LiveKitRouter);
+const CategoryRouter = require('./routes/categoryRoutes');
+app.use('/api/categories', CategoryRouter);
 
 app.get('/', (req, res) => {
   res.json({

@@ -11,12 +11,12 @@ const OnlineIndicator = ({ online, size = 'sm' }) => {
         <div className="relative inline-block">
             {online ? (
                 <div
-                    className={`${sizeClasses[size]} rounded-full bg-green-500 border-2 border-white dark:border-[#0a0a10]`}
+                    className={`${sizeClasses[size]} rounded-full bg-green-500`}
                     title="Online"
                 />
             ) : (
                 <div
-                    className={`${sizeClasses[size]} rounded-full bg-gray-400 dark:bg-gray-600 border-2 border-white dark:border-[#0a0a10]`}
+                    className={`${sizeClasses[size]} rounded-full bg-gray-400 dark:bg-gray-600`}
                     title="Offline"
                 />
             )}

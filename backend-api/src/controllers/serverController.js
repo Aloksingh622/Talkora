@@ -479,7 +479,13 @@ const getServerMembers = async (req, res) => {
                     select: {
                         id: true,
                         username: true,
-                        avatar: true
+                        displayName: true,
+                        avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true
                     }
                 }
             },
@@ -699,9 +705,68 @@ const transferOwnership = async (req, res) => {
     }
 };
 
+/**
+ * Get user's servers for profile display
+ * Returns owned servers and member servers separately with member counts
+ * GET /servers/my-servers
+ */
+const getUserServersProfile = async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        // Get servers user owns
+        const ownedServers = await prisma.server.findMany({
+            where: { ownerId: userId },
+            select: {
+                id: true,
+                name: true,
+                icon: true,
+                type: true,
+                _count: {
+                    select: { members: true }
+                }
+            }
+        });
+
+        // Get servers user is a member of (but doesn't own)
+        const memberships = await prisma.serverMember.findMany({
+            where: {
+                userId,
+                role: { not: 'OWNER' }
+            },
+            include: {
+                server: {
+                    select: {
+                        id: true,
+                        name: true,
+                        icon: true,
+                        type: true,
+                        _count: {
+                            select: { members: true }
+                        }
+                    }
+                }
+            }
+        });
+
+        res.status(200).json({
+            owned: ownedServers,
+            member: memberships.map(m => ({
+                id: m.id,
+                role: m.role,
+                server: m.server
+            }))
+        });
+    } catch (err) {
+        console.error("Get user servers profile error:", err);
+        res.status(500).json({ message: "Internal server error" });
+    }
+};
+
 module.exports = {
     createServer,
     getMyServers,
+    getUserServersProfile,
     searchServers,
     joinServer,
     leaveServer,

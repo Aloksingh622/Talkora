@@ -6,11 +6,15 @@ const {
     acceptFriendRequest,
     rejectOrRemoveFriend,
     getFriends,
-    getPendingRequests
+    getPendingRequests,
+    searchUsers
 } = require('../controllers/friendController');
 
 // All routes require authentication
 friendRouter.use(usermiddleware);
+
+// Search users
+friendRouter.get('/search', searchUsers);
 
 // Send friend request
 friendRouter.post('/request', sendFriendRequest);

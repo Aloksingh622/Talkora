@@ -1,16 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { getUserPresence } from '../services/presenceService';
 import OnlineIndicator from './OnlineIndicator';
-import { useSelector } from 'react-redux';
-import axios from '../utils/axios';
+import { useSelector, useDispatch } from 'react-redux';
 import BanMemberDialog from './BanMemberDialog';
 import KickMemberDialog from './KickMemberDialog';
 import TimeoutMemberDialog from './TimeoutMemberDialog';
-import { getBannedMembers } from '../services/memberService';
+import UserProfilePopup from './UserProfilePopup';
+import { fetchServerMembers, fetchBannedMembers } from '../redux/server_slice';
 
 const MemberList = ({ serverId, channelId }) => {
-    const [members, setMembers] = useState([]);
-    const [bannedUsers, setBannedUsers] = useState([]);
+    const dispatch = useDispatch();
+
+    // Get data from Redux
+    const currentUser = useSelector(state => state.auth.user);
+    const servers = useSelector(state => state.server.servers);
+    const serverDetails = useSelector(state => state.server.serverDetails[serverId] || {});
+
+    // Local UI state
     const [memberPresence, setMemberPresence] = useState({});
     const [isExpanded, setIsExpanded] = useState(false);
     const [contextMenu, setContextMenu] = useState(null);
@@ -18,47 +24,24 @@ const MemberList = ({ serverId, channelId }) => {
     const [showBanDialog, setShowBanDialog] = useState(false);
     const [showKickDialog, setShowKickDialog] = useState(false);
     const [showTimeoutDialog, setShowTimeoutDialog] = useState(false);
-    const currentUser = useSelector(state => state.auth.user);
-    const [currentServer, setCurrentServer] = useState(null);
+    const [profilePopup, setProfilePopup] = useState({ visible: false, user: null, position: { x: 0, y: 0 } });
 
+    // Derived data from Redux
+    const members = serverDetails.members || [];
+    const bannedUsers = serverDetails.bannedUsers || [];
+    const currentServer = servers.find(s => s.id === parseInt(serverId));
+
+    // Fetch members and banned users from Redux
     useEffect(() => {
         if (serverId) {
-            fetchMembers();
-            fetchBannedUsers();
-            fetchServerInfo();
-        }
-    }, [serverId]);
+            // Always fetch fresh members when switching servers (no cache)
+            dispatch(fetchServerMembers(serverId));
 
-    const fetchMembers = async () => {
-        try {
-            console.log('Fetching members for server:', serverId);
-            const response = await axios.get(`/api/servers/${serverId}/members`);
-            console.log('Members received:', response.data.members);
-            setMembers(response.data.members || []);
-        } catch (err) {
-            console.error('Failed to fetch members:', err);
+            // Always fetch fresh banned users
+            dispatch(fetchBannedMembers(serverId));
         }
-    };
+    }, [serverId, dispatch]);
 
-    const fetchBannedUsers = async () => {
-        try {
-            const data = await getBannedMembers(serverId);
-            setBannedUsers(data.bans || []);
-        } catch (err) {
-            // Not owner or error - ignore
-            console.log('Could not fetch banned users:', err.response?.data?.message);
-        }
-    };
-
-    const fetchServerInfo = async () => {
-        try {
-            const response = await axios.get(`/api/servers`);
-            const server = response.data.servers?.find(s => s.id === parseInt(serverId));
-            setCurrentServer(server);
-        } catch (err) {
-            console.error('Failed to fetch server info:', err);
-        }
-    };
 
     const fetchMemberPresence = async (userId) => {
         try {
@@ -141,13 +124,42 @@ const MemberList = ({ serverId, channelId }) => {
     };
 
     const handleActionSuccess = () => {
-        // Refresh members and banned users
-        fetchMembers();
-        fetchBannedUsers();
+        // Refresh members and banned users via Redux
+        dispatch(fetchServerMembers(serverId));
+        dispatch(fetchBannedMembers(serverId));
     };
 
-    const onlineMembers = members.filter(m => memberPresence[m.userId]?.online);
-    const offlineMembers = members.filter(m => !memberPresence[m.userId]?.online);
+    const handleMemberClick = (e, member) => {
+        e.stopPropagation();
+        const rect = e.currentTarget.getBoundingClientRect();
+        // Position popup to the left of the member list
+        setProfilePopup({
+            visible: true,
+            user: {
+                id: member.userId,
+                username: member.user?.username,
+                displayName: member.user?.displayName,
+                avatar: member.user?.avatar,
+                bannerColor: member.user?.bannerColor,
+                bannerImage: member.user?.bannerImage,
+                ringColor: member.user?.ringColor,
+                bio: member.user?.bio,
+                createdAt: member.user?.createdAt,
+                role: member.role
+            },
+            position: { x: rect.left - 320, y: rect.top },
+            isOnline: memberPresence[member.userId]?.online || false
+        });
+    };
+
+    // Helper to check if member is online (always true for current user)
+    const isMemberOnline = (userId) => {
+        if (currentUser && userId === currentUser.id) return true;
+        return memberPresence[userId]?.online || false;
+    };
+
+    const onlineMembers = members.filter(m => isMemberOnline(m.userId));
+    const offlineMembers = members.filter(m => !isMemberOnline(m.userId));
 
     // Helper function to check if user is banned
     const isBanned = (userId) => {
@@ -172,39 +184,79 @@ const MemberList = ({ serverId, channelId }) => {
     const renderMember = (member, isOnline) => {
         const banned = isBanned(member.userId);
         const canManage = isOwner && member.userId !== currentUser?.id && member.userId !== currentServer?.ownerId;
+        const userRingColor = member.user?.ringColor || '#8b5cf6';
+        const isServerOwner = member.role === 'OWNER';
+        const isAdmin = member.role === 'ADMIN';
 
         return (
             <div
                 key={member.userId}
-                className={`flex items-center px-2 py-2 rounded-lg hover:bg-gray-200 dark:hover:bg-white/5 cursor-pointer group transition-all relative ${!isOnline && 'opacity-60 hover:opacity-100'}`}
+                className={`flex items-center px-2.5 py-2.5 rounded-xl hover:bg-gray-100 dark:hover:bg-white/[0.06] cursor-pointer group transition-all duration-200 relative ${!isOnline && 'opacity-50 hover:opacity-100'}`}
+                onClick={(e) => handleMemberClick(e, member)}
             >
-                <div className={`w-9 h-9 rounded-full ${isOnline ? 'bg-gradient-to-br from-indigo-500 to-purple-600' : 'bg-gray-400 dark:bg-gray-700 grayscale group-hover:grayscale-0'} flex items-center justify-center text-white font-bold text-sm mr-3 relative transition-all flex-shrink-0`}>
-                    {member.user?.username?.[0]?.toUpperCase() || 'U'}
-                    <div className="absolute bottom-0 right-0 ring-2 ring-[#F9FAFB] dark:ring-[#111116] rounded-full">
+                {/* Avatar with ring color support */}
+                <div className="relative mr-3 flex-shrink-0">
+                    <div
+                        className={`w-11 h-11 rounded-full p-[2.5px] transition-all duration-300 ${!isOnline && 'grayscale group-hover:grayscale-0'} group-hover:scale-105`}
+                        style={{
+                            background: isOnline ? `linear-gradient(135deg, ${userRingColor}, ${userRingColor}88)` : 'linear-gradient(135deg, #6b7280, #4b5563)',
+                            boxShadow: isOnline ? `0 0 15px ${userRingColor}40` : 'none'
+                        }}
+                    >
+                        <div className="w-full h-full rounded-full bg-[#F9FAFB] dark:bg-[#111116] p-[1.5px]">
+                            {member.user?.avatar ? (
+                                <img
+                                    src={member.user.avatar}
+                                    alt={member.user?.username}
+                                    className="w-full h-full rounded-full object-cover"
+                                />
+                            ) : (
+                                <div className={`w-full h-full rounded-full flex items-center justify-center text-white font-bold text-sm ${isOnline ? 'bg-gradient-to-br from-indigo-500 to-purple-600' : 'bg-gray-400 dark:bg-gray-600'}`}>
+                                    {member.user?.username?.[0]?.toUpperCase() || 'U'}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                    <div className="absolute -bottom-0.5 -right-0.5 rounded-full">
                         <OnlineIndicator online={isOnline} size="xs" />
                     </div>
                 </div>
+
                 <div className="flex-1 min-w-0">
-                    <div className={`text-sm font-bold truncate transition-colors ${banned
-                        ? 'text-red-500 dark:text-red-400'
-                        : isOnline
-                            ? 'text-gray-900 dark:text-gray-200 group-hover:text-rose-500'
-                            : 'text-gray-700 dark:text-gray-400 group-hover:text-gray-900 dark:group-hover:text-gray-200'
-                        }`}>
-                        {member.user?.username}
-                        {banned && <span className="ml-1 text-xs font-normal">(Banned)</span>}
+                    <div className="flex items-center gap-1.5">
+                        <span className={`text-sm font-semibold truncate transition-colors ${banned
+                            ? 'text-red-500 dark:text-red-400'
+                            : isOnline
+                                ? 'text-gray-900 dark:text-white group-hover:text-rose-500'
+                                : 'text-gray-600 dark:text-gray-400 group-hover:text-gray-900 dark:group-hover:text-gray-200'
+                            }`}>
+                            {member.user?.displayName || member.user?.username}
+                        </span>
+                        {banned && <span className="text-[10px] bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded font-medium">Banned</span>}
                         {member.userId === currentUser?.id && (
-                            <span className={`ml-1 text-xs font-normal ${banned ? 'text-red-400' : 'text-rose-400'}`}>(you)</span>
+                            <span className="text-[10px] bg-rose-500/20 text-rose-400 px-1.5 py-0.5 rounded font-medium">you</span>
                         )}
                     </div>
-                    {member.role === 'OWNER' && (
-                        <div className="text-[10px] font-bold text-rose-500 flex items-center mt-0.5">
-                            <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" /></svg>
-                            Owner
+                    {/* Role Badge */}
+                    {isServerOwner && (
+                        <div className="flex items-center mt-0.5">
+                            <span className="inline-flex items-center text-[10px] font-bold text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded">
+                                <svg className="w-3 h-3 mr-0.5" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" /></svg>
+                                Owner
+                            </span>
+                        </div>
+                    )}
+                    {isAdmin && !isServerOwner && (
+                        <div className="flex items-center mt-0.5">
+                            <span className="inline-flex items-center text-[10px] font-bold text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded">
+                                <svg className="w-3 h-3 mr-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
+                                Admin
+                            </span>
                         </div>
                     )}
                     {!isOnline && memberPresence[member.userId]?.lastSeen && (
-                        <div className="text-xs text-gray-500 dark:text-gray-600 mt-0.5">
+                        <div className="text-[11px] text-gray-400 dark:text-gray-500 mt-0.5 flex items-center">
+                            <svg className="w-3 h-3 mr-1 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                             {getRelativeTime(memberPresence[member.userId].lastSeen)}
                         </div>
                     )}
@@ -217,10 +269,10 @@ const MemberList = ({ serverId, channelId }) => {
                             e.stopPropagation();
                             handleContextMenu(e, member);
                         }}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 hover:bg-gray-300 dark:hover:bg-white/10 rounded-lg"
+                        className="opacity-0 group-hover:opacity-100 transition-all p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-lg"
                         title="Manage member"
                     >
-                        <svg className="w-4 h-4 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-4 h-4 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
                         </svg>
                     </button>
@@ -296,12 +348,41 @@ const MemberList = ({ serverId, channelId }) => {
                             </div>
 
                             <div className="flex flex-col items-center space-y-2">
-                                {onlineMembers.slice(0, 5).map(member => (
-                                    <div key={member.userId} className="w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center text-white text-xs font-bold relative shadow-sm ring-2 ring-transparent hover:ring-rose-500 transition-all">
-                                        {member.user?.username?.[0]?.toUpperCase()}
-                                        <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-[#F9FAFB] dark:border-[#0e0e12] rounded-full"></div>
-                                    </div>
-                                ))}
+                                {onlineMembers.slice(0, 5).map(member => {
+                                    const userRingColor = member.user?.ringColor || '#8b5cf6';
+                                    return (
+                                        <div
+                                            key={member.userId}
+                                            className="relative"
+                                            title={member.user?.displayName || member.user?.username}
+                                        >
+                                            <div
+                                                className="w-9 h-9 rounded-full p-[2px] transition-all hover:scale-110"
+                                                style={{
+                                                    background: `linear-gradient(135deg, ${userRingColor}, ${userRingColor}88)`,
+                                                    boxShadow: `0 0 8px ${userRingColor}30`
+                                                }}
+                                            >
+                                                <div className="w-full h-full rounded-full bg-[#F9FAFB] dark:bg-[#0e0e12] p-[1px]">
+                                                    {member.user?.avatar ? (
+                                                        <img
+                                                            src={member.user.avatar}
+                                                            alt={member.user?.username}
+                                                            className="w-full h-full rounded-full object-cover"
+                                                        />
+                                                    ) : (
+                                                        <div className="w-full h-full rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold">
+                                                            {member.user?.username?.[0]?.toUpperCase()}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <div className="absolute -bottom-0.5 -right-0.5 rounded-full">
+                                                <OnlineIndicator online={true} size="xs" />
+                                            </div>
+                                        </div>
+                                    );
+                                })}
                                 {(onlineMembers.length > 5) && (
                                     <div className="text-xs text-gray-400 font-bold">+{onlineMembers.length - 5}</div>
                                 )}
@@ -376,6 +457,17 @@ const MemberList = ({ serverId, channelId }) => {
                 serverId={serverId}
                 onSuccess={handleActionSuccess}
             />
+
+            {/* User Profile Popup */}
+            {profilePopup.visible && profilePopup.user && (
+                <UserProfilePopup
+                    user={profilePopup.user}
+                    position={profilePopup.position}
+                    currentUser={currentUser}
+                    isOnline={profilePopup.isOnline}
+                    onClose={() => setProfilePopup({ visible: false, user: null, position: { x: 0, y: 0 } })}
+                />
+            )}
 
             <style jsx>{`
                 @keyframes scaleIn {

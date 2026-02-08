@@ -34,7 +34,17 @@ const socketAuthMiddleware = async (socket, next) => {
         // Verify user existence
         const user = await prisma.user.findUnique({
             where: { id: decoded.id },
-            select: { id: true, username: true }
+            select: {
+                id: true,
+                username: true,
+                displayName: true,
+                avatar: true,
+                bannerColor: true,
+                bannerImage: true,
+                ringColor: true,
+                bio: true,
+                createdAt: true
+            }
         });
 
         if (!user) {

@@ -116,6 +116,7 @@ let signup = async (req, res) => {
     let reply = {
       id: user.id,
       username: user.username,
+      displayName: user.displayName,
       email: user.email,
       avatar: user.avatar,
     }
@@ -183,6 +184,7 @@ let login = async (req, res) => {
     let reply = {
       id: user.id,
       username: user.username,
+      displayName: user.displayName,
       email: user.email,
       avatar: user.avatar,
       setpassword
@@ -246,14 +248,20 @@ let delete_profile = async (req, res) => {
 let check_user = async (req, res) => {
   try {
 
-    console.log("hiiiiii      dcdddccc")
     const user = req.user;
     let setpassword = req.user.password ? true : false;
     const reply = {
       username: user.username,
+      displayName: user.displayName,
       email: user.email,
       id: user.id,
       avatar: user.avatar,
+      bannerColor: user.bannerColor || '#f43f5e',
+      bannerImage: user.bannerImage,
+      ringColor: user.ringColor || '#f43f5e',
+      bio: user.bio || '',
+      dateOfBirth: user.dateOfBirth,
+      passwordChangedAt: user.passwordChangedAt,
       role: user.role,
       createdAt: user.createdAt,
       setpassword,
@@ -321,6 +329,7 @@ const social_login = async (req, res) => {
 
     const reply = {
       name: user.username,
+      displayName: user.displayName,
       email: user.email,
       id: user.id,
       avatar: user.avatar,
@@ -399,6 +408,7 @@ const social_login_only = async (req, res) => {
     const reply = {
       id: user.id,
       username: user.username,
+      displayName: user.displayName,
       email: user.email,
       avatar: user.avatar,
       role: user.role,
@@ -492,7 +502,7 @@ let change_pass = async (req, res) => {
     user.password = hashedPassword;
     await prisma.user.update({
       where: { id: userId },
-      data: { password: hashedPassword }
+      data: { password: hashedPassword, passwordChangedAt: new Date() }
     });
 
     return res.status(200).json({ message: 'Password updated successfully!' });
@@ -530,7 +540,7 @@ let set_pass = async (req, res) => {
     user.password = hashedPassword;
     await prisma.user.update({
       where: { id: userId },
-      data: { password: hashedPassword }
+      data: { password: hashedPassword, passwordChangedAt: new Date() }
     });
 
     return res.status(200).json({ message: 'Password updated successfully!' });
@@ -695,7 +705,7 @@ const change_role = async (req, res) => {
 const update_profile = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { username } = req.body;
+    const { username, displayName, bannerColor, bannerImage, ringColor, bio, dateOfBirth } = req.body;
     const file = req.file;
 
     const updateData = {};
@@ -722,12 +732,42 @@ const update_profile = async (req, res) => {
       }
     }
 
-    // 2. Handle Avatar Update
+    // 2. Handle Display Name Update
+    if (displayName !== undefined) {
+      updateData.displayName = displayName;
+    }
+
+    // 3. Handle Avatar Update
     if (file) {
       const result = await uploadOnCloudinary(file.path);
       if (result) {
         updateData.avatar = result;
       }
+    }
+
+    // 4. Handle Banner Color Update
+    if (bannerColor !== undefined) {
+      updateData.bannerColor = bannerColor;
+    }
+
+    // 5. Handle Banner Image Update
+    if (bannerImage !== undefined) {
+      updateData.bannerImage = bannerImage || null; // Allow clearing
+    }
+
+    // 6. Handle Ring Color Update
+    if (ringColor !== undefined) {
+      updateData.ringColor = ringColor;
+    }
+
+    // 7. Handle Bio Update
+    if (bio !== undefined) {
+      updateData.bio = bio || null;
+    }
+
+    // 8. Handle Date of Birth Update
+    if (dateOfBirth !== undefined) {
+      updateData.dateOfBirth = dateOfBirth ? new Date(dateOfBirth) : null;
     }
 
     if (Object.keys(updateData).length === 0) {
@@ -740,8 +780,14 @@ const update_profile = async (req, res) => {
       select: {
         id: true,
         username: true,
+        displayName: true,
         email: true,
         avatar: true,
+        bannerColor: true,
+        bannerImage: true,
+        ringColor: true,
+        bio: true,
+        dateOfBirth: true,
         role: true,
         createdAt: true,
         firebase_uid: true
@@ -755,6 +801,19 @@ const update_profile = async (req, res) => {
       message: "Profile updated successfully",
       user: { ...updatedUser, setpassword }
     });
+
+    // Broadcast user update to all connected clients (simplest approach for now)
+    // In a real app, we might want to be more selective, but for profile pics, global is okay for this scale
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('USER_UPDATED', {
+        id: updatedUser.id,
+        username: updatedUser.username,
+        displayName: updatedUser.displayName,
+        avatar: updatedUser.avatar,
+        bannerColor: updatedUser.bannerColor
+      });
+    }
 
   } catch (err) {
     console.error("Update profile error:", err);

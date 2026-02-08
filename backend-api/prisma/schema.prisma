@@ -30,19 +30,26 @@ enum ServerType {
 
 enum ChannelType {
   TEXT
+  AUDIO
+  VIDEO
 }
 
 model User {
-  id           Int       @id @default(autoincrement())
-  email        String    @unique
-  username     String    @unique
-  displayName  String?
-  password     String
-  dateOfBirth  DateTime?
-  avatar       String?
-  role         Role      @default(user)
-  firebase_uid String?
-  createdAt    DateTime  @default(now())
+  id                Int       @id @default(autoincrement())
+  email             String    @unique
+  username          String    @unique
+  displayName       String?
+  password          String
+  dateOfBirth       DateTime?
+  avatar            String?
+  bannerColor       String?   @default("#f43f5e")
+  bannerImage       String?
+  ringColor         String?   @default("#f43f5e")
+  bio               String?
+  passwordChangedAt DateTime?
+  role              Role      @default(user)
+  firebase_uid      String?
+  createdAt         DateTime  @default(now())
 
   ownedServers Server[]
   memberships  ServerMember[]
@@ -80,6 +87,7 @@ model Server {
 
   members      ServerMember[]
   channels     Channel[]
+  categories   Category[]
   joinRequests JoinRequest[]
 
   // Member management relations
@@ -89,15 +97,28 @@ model Server {
   auditLogs AuditLog[]
 }
 
+model Category {
+  id        Int       @id @default(autoincrement())
+  name      String
+  serverId  Int
+  server    Server    @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  channels  Channel[]
+  order     Int       @default(0)
+  createdAt DateTime  @default(now())
+
+  @@index([serverId])
+}
+
 model Channel {
   id        Int         @id @default(autoincrement())
   name      String
   type      ChannelType @default(TEXT)
   serverId  Int
+  server    Server      @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  categoryId Int?
+  category   Category?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   createdAt DateTime    @default(now())
-
-  server   Server    @relation(fields: [serverId], references: [id], onDelete: Cascade)
-  messages Message[]
+  messages  Message[]
 
   @@unique([serverId, name])
 }

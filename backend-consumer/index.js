@@ -34,4 +34,11 @@ if (cluster.isPrimary) {
     } catch (err) {
         console.error(`Worker ${process.pid} failed to start realtime consumer:`, err);
     }
+
+    // Start Cache Consumer
+    try {
+        require('./src/consumers/messageCache');
+    } catch (err) {
+        console.error(`Worker ${process.pid} failed to start cache consumer:`, err);
+    }
 }

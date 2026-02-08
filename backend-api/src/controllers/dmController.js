@@ -22,7 +22,12 @@ const getDMConversations = async (req, res) => {
                         id: true,
                         username: true,
                         displayName: true,
-                        avatar: true
+                        avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 },
                 user2: {
@@ -30,7 +35,12 @@ const getDMConversations = async (req, res) => {
                         id: true,
                         username: true,
                         displayName: true,
-                        avatar: true
+                        avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 },
                 messages: {
@@ -84,7 +94,12 @@ const getDMChannelInfo = async (req, res) => {
                         id: true,
                         username: true,
                         displayName: true,
-                        avatar: true
+                        avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 },
                 user2: {
@@ -92,7 +107,12 @@ const getDMChannelInfo = async (req, res) => {
                         id: true,
                         username: true,
                         displayName: true,
-                        avatar: true
+                        avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 }
             }
@@ -183,7 +203,12 @@ const createOrGetDMChannel = async (req, res) => {
                         id: true,
                         username: true,
                         displayName: true,
-                        avatar: true
+                        avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 },
                 user2: {
@@ -191,7 +216,12 @@ const createOrGetDMChannel = async (req, res) => {
                         id: true,
                         username: true,
                         displayName: true,
-                        avatar: true
+                        avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 }
             }
@@ -210,7 +240,12 @@ const createOrGetDMChannel = async (req, res) => {
                             id: true,
                             username: true,
                             displayName: true,
-                            avatar: true
+                            avatar: true,
+                            bannerColor: true,
+                            bannerImage: true,
+                            ringColor: true,
+                            bio: true,
+                            createdAt: true,
                         }
                     },
                     user2: {
@@ -218,7 +253,12 @@ const createOrGetDMChannel = async (req, res) => {
                             id: true,
                             username: true,
                             displayName: true,
-                            avatar: true
+                            avatar: true,
+                            bannerColor: true,
+                            bannerImage: true,
+                            ringColor: true,
+                            bio: true,
+                            createdAt: true,
                         }
                     }
                 }
@@ -266,7 +306,12 @@ const getDMMessages = async (req, res) => {
                         id: true,
                         username: true,
                         displayName: true,
-                        avatar: true
+                        avatar: true,
+                        bannerColor: true,
+                        bannerImage: true,
+                        ringColor: true,
+                        bio: true,
+                        createdAt: true,
                     }
                 }
             }

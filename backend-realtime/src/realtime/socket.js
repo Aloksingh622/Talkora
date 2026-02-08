@@ -36,25 +36,58 @@ const initSocket = (httpServer) => {
     pubClient.on('ready', () => console.log('Redis Pub Client ready'));
     subClient.on('ready', () => console.log('Redis Sub Client ready'));
 
+    const GATEWAY_ID = `gateway:${process.env.PORT || 3001}`;
+
     Promise.all([pubClient.connect(), subClient.connect()]).then(() => {
         // IMPORTANT: Attach event listeners BEFORE creating adapter
         // so we can capture subscription events during adapter initialization
 
-        // Debug: Log ALL Redis pub/sub activity
+        // Debug: Log ALL Redis pub/sub activity with gateway identification
         subClient.on('message', (channel, message) => {
-            console.log(`[REDIS-ADAPTER] 📨 Message on channel "${channel}":`, message.substring(0, 100));
+            try {
+                // Try to parse and extract room info
+                const parsed = JSON.parse(message);
+                const room = parsed.rooms?.[0] || 'unknown';
+                const event = parsed.data?.[0] || 'unknown';
+
+                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                console.log(`📨 [${GATEWAY_ID}] RECEIVED MESSAGE FROM REDIS`);
+                console.log(`   └─ Channel: ${channel}`);
+                console.log(`   └─ Room: ${room}`);
+                console.log(`   └─ Event: ${event}`);
+                console.log(`   └─ Time: ${new Date().toLocaleTimeString()}`);
+                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            } catch (e) {
+                // If parsing fails, just log raw
+                console.log(`[${GATEWAY_ID}] 📨 Message on channel "${channel}":`, message.substring(0, 150));
+            }
         });
 
         subClient.on('pmessage', (pattern, channel, message) => {
-            console.log(`[REDIS-ADAPTER] 📨 Pattern message - pattern: "${pattern}", channel: "${channel}":`, message.substring(0, 100));
+            try {
+                const parsed = JSON.parse(message);
+                const room = parsed.rooms?.[0] || 'unknown';
+                const event = parsed.data?.[0] || 'unknown';
+
+                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                console.log(`📨 [${GATEWAY_ID}] RECEIVED PATTERN MESSAGE FROM REDIS`);
+                console.log(`   └─ Pattern: ${pattern}`);
+                console.log(`   └─ Channel: ${channel}`);
+                console.log(`   └─ Room: ${room}`);
+                console.log(`   └─ Event: ${event}`);
+                console.log(`   └─ Time: ${new Date().toLocaleTimeString()}`);
+                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            } catch (e) {
+                console.log(`[${GATEWAY_ID}] 📨 Pattern message - pattern: "${pattern}", channel: "${channel}":`, message.substring(0, 150));
+            }
         });
 
         subClient.on('subscribe', (channel, count) => {
-            console.log(`[REDIS-ADAPTER] ✅ Subscribed to channel: "${channel}" (count: ${count})`);
+            console.log(`[${GATEWAY_ID}] ✅ Subscribed to channel: "${channel}" (count: ${count})`);
         });
 
         subClient.on('psubscribe', (pattern, count) => {
-            console.log(`[REDIS-ADAPTER] ✅ Pattern subscribed to: "${pattern}" (count: ${count})`);
+            console.log(`[${GATEWAY_ID}] ✅ Pattern subscribed to: "${pattern}" (count: ${count})`);
         });
 
         // NOW create the adapter (this will trigger subscription events)
@@ -62,20 +95,20 @@ const initSocket = (httpServer) => {
             key: 'socket.io'
         });
         io.adapter(adapter);
-        console.log('✅ Redis Adapter for Socket.IO connected successfully!');
+        console.log(`✅ [${GATEWAY_ID}] Redis Adapter for Socket.IO connected successfully!`);
 
         // Debug: Check subscriptions after adapter initialization
         setTimeout(async () => {
-            console.log('[REDIS-ADAPTER] 🔍 Checking subscription state...');
+            console.log(`[${GATEWAY_ID}] 🔍 Checking subscription state...`);
             try {
                 // Try to get subscription info (this might not work with all Redis clients)
                 const info = await subClient.sendCommand(['PUBSUB', 'CHANNELS', 'socket.io*']);
-                console.log('[REDIS-ADAPTER] 📋 Active channels matching "socket.io*":', info);
+                console.log(`[${GATEWAY_ID}] 📋 Active channels matching "socket.io*":`, info);
 
                 const patterns = await subClient.sendCommand(['PUBSUB', 'NUMPAT']);
-                console.log('[REDIS-ADAPTER] 📋 Number of pattern subscriptions:', patterns);
+                console.log(`[${GATEWAY_ID}] 📋 Number of pattern subscriptions:`, patterns);
             } catch (err) {
-                console.log('[REDIS-ADAPTER] ⚠️ Could not query subscription state:', err.message);
+                console.log(`[${GATEWAY_ID}] ⚠️ Could not query subscription state:`, err.message);
             }
         }, 2000);
     }).catch(err => {
@@ -99,8 +132,46 @@ const initSocket = (httpServer) => {
         try {
             await addUserSession(socket.id, socket.user.id);
             console.log(`✅ User ${socket.user.id} (${socket.user.username}) presence tracked on ${instanceId}`);
+
+            // 1. Join User Room (for receiving personalized events like Friend Requests, DM notifications, Presence updates)
+            const userRoom = `user:${socket.user.id}`;
+            socket.join(userRoom);
+            console.log(`✅ User ${socket.user.id} joined personal room: ${userRoom}`);
+
+            // 2. Broadcast ONLINE status to friends
+            // We need to find all friends of this user to notify them
+            const prisma = require('../utils/prisma');
+            const friendships = await prisma.friendship.findMany({
+                where: {
+                    OR: [
+                        { requesterId: socket.user.id },
+                        { addresseeId: socket.user.id }
+                    ],
+                    status: 'ACCEPTED'
+                }
+            });
+
+            // Extract friend IDs
+            const friendIds = friendships.map(f =>
+                f.requesterId === socket.user.id ? f.addresseeId : f.requesterId
+            );
+
+            // Emit to each friend's personal room
+            if (friendIds.length > 0) {
+                // We can emit to multiple rooms? No, io.to takes a room or list.
+                // Ideally we emit to each friend room.
+                friendIds.forEach(friendId => {
+                    io.to(`user:${friendId}`).emit('PRESENCE_UPDATE', {
+                        userId: socket.user.id,
+                        status: 'online',
+                        lastSeen: null
+                    });
+                });
+                console.log(`📢 Broadcasted ONLINE status to ${friendIds.length} friends`);
+            }
+
         } catch (err) {
-            console.error('Failed to track user presence:', err);
+            console.error('Failed to update presence/notify friends:', err);
         }
 
         registerSocketEvents(io, socket);

@@ -30,3 +30,9 @@ export const getPendingRequests = async () => {
     const response = await axios_Client.get('/api/friends/requests');
     return response.data; // { requests: [...] }
 };
+
+// Search users by username or displayName
+export const searchUsers = async (query) => {
+    const response = await axios_Client.get(`/api/friends/search?query=${encodeURIComponent(query)}`);
+    return response.data; // { users: [...] }
+};

@@ -3,6 +3,7 @@ const { setTypingStatus, removeTypingStatus } = require('../redis/typing');
 const { checkRateLimit } = require('../redis/ratelimit');
 const { refreshOnlineStatus } = require('../redis/presence');
 const { getCachedChannelServerId, getCachedUserPermissions, getCachedDMChannelMembers } = require('../redis/cache');
+const { userJoinedRoom, userLeftRoom } = require('../redis/roomRegistry');
 const kafkaProducer = require('../kafka/producer');
 const crypto = require('crypto');
 
@@ -39,6 +40,14 @@ const registerSocketEvents = (io, socket) => {
 
             const roomName = `channel:${channelIdInt}`;
             socket.join(roomName);
+
+            // Track this socket's rooms for disconnect cleanup
+            if (!socket.joinedRooms) socket.joinedRooms = new Set();
+            socket.joinedRooms.add(roomName);
+
+            // Register gateway for this room (for targeted Redis publishing)
+            await userJoinedRoom(roomName);
+
             console.log(`✅ [JOIN_CHANNEL] User ${socket.user.id} (${socket.user.username}) successfully joined ${roomName}`);
 
             // Optional: Ack back to client
@@ -51,12 +60,24 @@ const registerSocketEvents = (io, socket) => {
     });
 
     // 2. LEAVE_CHANNEL
-    socket.on('LEAVE_CHANNEL', ({ channelId }) => {
+    socket.on('LEAVE_CHANNEL', async ({ channelId }) => {
         if (!channelId) return;
         const roomName = `channel:${parseInt(channelId)}`;
         socket.leave(roomName);
+
+        // Remove from socket's tracked rooms
+        if (socket.joinedRooms) socket.joinedRooms.delete(roomName);
+
+        // Unregister gateway if last user leaves
+        await userLeftRoom(roomName);
+
         console.log(`User ${socket.user.id} left ${roomName}`);
     });
+
+    // Note: JOIN_DM handler is defined later in the DM EVENTS section (with database verification)
+
+    // 2c. LEAVE_DM - Leave a DM room (early handler, main one is below)
+    // Note: This is kept for backwards compatibility, main LEAVE_DM handler is in DM section
 
     // 3. TYPING STATUS
     socket.on('TYPING_START', async ({ channelId }) => {
@@ -160,7 +181,13 @@ const registerSocketEvents = (io, socket) => {
                 user: {
                     id: socket.user.id,
                     username: socket.user.username,
-                    avatar: socket.user.avatar
+                    displayName: socket.user.displayName,
+                    avatar: socket.user.avatar,
+                    bannerColor: socket.user.bannerColor,
+                    bannerImage: socket.user.bannerImage,
+                    ringColor: socket.user.ringColor,
+                    bio: socket.user.bio,
+                    createdAt: socket.user.createdAt
                 },
                 createdAt: new Date().toISOString()
             };
@@ -312,26 +339,42 @@ const registerSocketEvents = (io, socket) => {
 
     // Join DM room
     socket.on('JOIN_DM', async ({ channelId }) => {
+        console.log('🔵 JOIN_DM event received!', { channelId, userId: socket.user?.id });
         try {
-            if (!channelId) return;
+            console.log(`[JOIN_DM] Request from user ${socket.user.id} for channel ${channelId}`);
+
+            if (!channelId) {
+                console.log('[JOIN_DM] No channelId provided');
+                return;
+            }
             const channelIdInt = parseInt(channelId);
 
             // Verify user is part of this DM channel (Cached)
             const dmChannel = await getCachedDMChannelMembers(channelIdInt);
 
             if (!dmChannel) {
+                console.log(`[JOIN_DM] DM channel ${channelIdInt} not found`);
                 socket.emit('ERROR', { message: 'DM channel not found' });
                 return;
             }
 
             if (dmChannel.user1Id !== socket.user.id && dmChannel.user2Id !== socket.user.id) {
+                console.log(`[JOIN_DM] User ${socket.user.id} not authorized for channel ${channelIdInt}`);
                 socket.emit('ERROR', { message: 'Access denied' });
                 return;
             }
 
             const roomName = `dm:${channelIdInt}`;
             socket.join(roomName);
-            console.log(`User ${socket.user.id} (${socket.user.username}) joined ${roomName}`);
+
+            // Track this socket's rooms for disconnect cleanup
+            if (!socket.joinedRooms) socket.joinedRooms = new Set();
+            socket.joinedRooms.add(roomName);
+
+            // Register gateway for this room (for targeted Redis publishing)
+            await userJoinedRoom(roomName);
+
+            console.log(`✅ User ${socket.user.id} (${socket.user.username}) joined ${roomName}`);
 
             socket.emit('JOINED_DM', { channelId: channelIdInt });
 
@@ -342,10 +385,17 @@ const registerSocketEvents = (io, socket) => {
     });
 
     // Leave DM room
-    socket.on('LEAVE_DM', ({ channelId }) => {
+    socket.on('LEAVE_DM', async ({ channelId }) => {
         if (!channelId) return;
         const roomName = `dm:${parseInt(channelId)}`;
         socket.leave(roomName);
+
+        // Remove from socket's tracked rooms
+        if (socket.joinedRooms) socket.joinedRooms.delete(roomName);
+
+        // Unregister gateway if last user leaves
+        await userLeftRoom(roomName);
+
         console.log(`User ${socket.user.id} left ${roomName}`);
     });
 
@@ -403,7 +453,12 @@ const registerSocketEvents = (io, socket) => {
                     id: socket.user.id,
                     username: socket.user.username,
                     displayName: socket.user.displayName,
-                    avatar: socket.user.avatar
+                    avatar: socket.user.avatar,
+                    bannerColor: socket.user.bannerColor,
+                    bannerImage: socket.user.bannerImage,
+                    ringColor: socket.user.ringColor,
+                    bio: socket.user.bio,
+                    createdAt: socket.user.createdAt
                 },
                 createdAt: new Date().toISOString()
             };
@@ -485,6 +540,140 @@ const registerSocketEvents = (io, socket) => {
         }
     });
 
+    // ============================================
+    // DM CALL EVENTS
+    // ============================================
+
+    // INITIATE_CALL - User starts a call
+    socket.on('INITIATE_CALL', async ({ channelId, callType }, callback) => {
+        try {
+            const channelIdInt = parseInt(channelId);
+            const userId = socket.user.id;
+
+            // Verify DM channel and get other participant
+            const dmChannel = await prisma.directMessageChannel.findUnique({
+                where: { id: channelIdInt },
+                include: {
+                    user1: { select: { id: true, username: true, avatar: true } },
+                    user2: { select: { id: true, username: true, avatar: true } }
+                }
+            });
+
+            if (!dmChannel) {
+                if (typeof callback === 'function') callback({ error: 'DM channel not found' });
+                return;
+            }
+
+            // Verify user is a participant
+            if (dmChannel.user1Id !== userId && dmChannel.user2Id !== userId) {
+                if (typeof callback === 'function') callback({ error: 'Access denied' });
+                return;
+            }
+
+            // Get other user
+            const otherUser = dmChannel.user1Id === userId ? dmChannel.user2 : dmChannel.user1;
+
+            // Send INCOMING_CALL to other user
+            io.to(`dm:${channelIdInt}`).emit('INCOMING_CALL', {
+                channelId: channelIdInt,
+                callType,
+                from: {
+                    id: socket.user.id,
+                    username: socket.user.username,
+                    avatar: socket.user.avatar
+                }
+            });
+
+            console.log(`📞 Call initiated: ${socket.user.username} → ${otherUser.username} (${callType})`);
+
+            if (typeof callback === 'function') callback({ success: true });
+
+        } catch (err) {
+            console.error('[INITIATE_CALL] Error:', err);
+            if (typeof callback === 'function') callback({ error: 'Internal server error' });
+        }
+    });
+
+    // ANSWER_CALL - User answers an incoming call
+    socket.on('ANSWER_CALL', async ({ channelId }, callback) => {
+        try {
+            const channelIdInt = parseInt(channelId);
+
+            // Broadcast to both users in the DM
+            io.to(`dm:${channelIdInt}`).emit('CALL_ANSWERED', {
+                channelId: channelIdInt
+            });
+
+            console.log(`✅ Call answered on channel ${channelIdInt}`);
+
+            if (typeof callback === 'function') callback({ success: true });
+
+        } catch (err) {
+            console.error('[ANSWER_CALL] Error:', err);
+            if (typeof callback === 'function') callback({ error: 'Internal server error' });
+        }
+    });
+
+    // DECLINE_CALL - User declines an incoming call
+    socket.on('DECLINE_CALL', async ({ channelId }, callback) => {
+        try {
+            const channelIdInt = parseInt(channelId);
+
+            // Notify the caller
+            io.to(`dm:${channelIdInt}`).emit('CALL_DECLINED', {
+                channelId: channelIdInt
+            });
+
+            console.log(`❌ Call declined on channel ${channelIdInt}`);
+
+            if (typeof callback === 'function') callback({ success: true });
+
+        } catch (err) {
+            console.error('[DECLINE_CALL] Error:', err);
+            if (typeof callback === 'function') callback({ error: 'Internal server error' });
+        }
+    });
+
+    // END_CALL - Either user ends the call
+    socket.on('END_CALL', async ({ channelId }, callback) => {
+        try {
+            const channelIdInt = parseInt(channelId);
+
+            // Notify both users
+            io.to(`dm:${channelIdInt}`).emit('CALL_ENDED', {
+                channelId: channelIdInt
+            });
+
+            console.log(`🔚 Call ended on channel ${channelIdInt}`);
+
+            if (typeof callback === 'function') callback({ success: true });
+
+        } catch (err) {
+            console.error('[END_CALL] Error:', err);
+            if (typeof callback === 'function') callback({ error: 'Internal server error' });
+        }
+    });
+
+    // CANCEL_CALL - Caller cancels before answer
+    socket.on('CANCEL_CALL', async ({ channelId }, callback) => {
+        try {
+            const channelIdInt = parseInt(channelId);
+
+            // Notify the other user
+            io.to(`dm:${channelIdInt}`).emit('CALL_CANCELLED', {
+                channelId: channelIdInt
+            });
+
+            console.log(`🚫 Call cancelled on channel ${channelIdInt}`);
+
+            if (typeof callback === 'function') callback({ success: true });
+
+        } catch (err) {
+            console.error('[CANCEL_CALL] Error:', err);
+            if (typeof callback === 'function') callback({ error: 'Internal server error' });
+        }
+    });
+
     // 9. DISCONNECT - Clean up user presence
     socket.on('disconnect', async (reason) => {
         try {
@@ -500,11 +689,50 @@ const registerSocketEvents = (io, socket) => {
             console.log(`   └─ Time: ${new Date().toLocaleTimeString()}`);
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
+            // Clean up room registry for all rooms this socket was in
+            if (socket.joinedRooms && socket.joinedRooms.size > 0) {
+                console.log(`[DISCONNECT] Cleaning up ${socket.joinedRooms.size} rooms for socket ${socket.id}`);
+                for (const roomName of socket.joinedRooms) {
+                    await userLeftRoom(roomName);
+                }
+                socket.joinedRooms.clear();
+            }
+
             // Remove user session and clean up presence data
             const { removeUserSession } = require('../redis/presence');
             await removeUserSession(socket.id);
 
             console.log(`✅ User ${socket.user?.id} presence cleaned up from ${instanceId}`);
+
+            // 3. Broadcast OFFLINE status to friends
+            if (socket.user?.id) {
+                const friendships = await prisma.friendship.findMany({
+                    where: {
+                        OR: [
+                            { requesterId: socket.user.id },
+                            { addresseeId: socket.user.id }
+                        ],
+                        status: 'ACCEPTED'
+                    }
+                });
+
+                const friendIds = friendships.map(f =>
+                    f.requesterId === socket.user.id ? f.addresseeId : f.requesterId
+                );
+
+                if (friendIds.length > 0) {
+                    const io = socket.server; // Get IO instance
+                    friendIds.forEach(friendId => {
+                        io.to(`user:${friendId}`).emit('PRESENCE_UPDATE', {
+                            userId: socket.user.id,
+                            status: 'offline',
+                            lastSeen: Date.now()
+                        });
+                    });
+                    console.log(`📢 Broadcasted OFFLINE status to ${friendIds.length} friends`);
+                }
+            }
+
         } catch (err) {
             console.error('Disconnect cleanup error:', err);
         }
