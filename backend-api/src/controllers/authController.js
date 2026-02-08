@@ -27,6 +27,8 @@ let email_varification = async (req, res) => {
       digits: true
     })
 
+    console.log("otp sended is ######", otp);
+
     // Store OTP in Redis
     await redisclient.set(`otp:${email}`, otp, {
       EX: 300,

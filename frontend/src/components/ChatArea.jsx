@@ -1,5 +1,9 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { getMessages, sendMessageREST, editMessage, deleteMessage, uploadFile } from '../services/messageService';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+
+import { getMessages, sendMessageREST, editMessage, deleteMessage, uploadFile, enhanceMessage, summarizeChat, askChatbot } from '../services/messageService';
+
 import { getDMMessages, sendDMMessage, getDMChannel } from '../services/dmService';
 import { getSocket } from '../utils/socket';
 import { getUserPresence } from '../services/presenceService';
@@ -8,6 +12,7 @@ import { useSelector } from 'react-redux';
 import OnlineIndicator from './OnlineIndicator';
 import imageCompression from 'browser-image-compression';
 import UserProfilePopup from './UserProfilePopup';
+import { Sparkles, Loader2, FileText, History, X } from 'lucide-react';
 
 const MAX_FILE_SIZE_MB = 30;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
@@ -19,6 +24,7 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
     const [typingUser, setTypingUser] = useState(null);
     const [userPresence, setUserPresence] = useState({}); // {userId: {online: bool, lastSeen: timestamp}}
     const [bannedUsers, setBannedUsers] = useState(new Set()); // Set of banned user IDs
+
     const [timedOutUsers, setTimedOutUsers] = useState({}); // {userId: {expiresAt, reason}}
     const [currentUserBanned, setCurrentUserBanned] = useState(false);
     const [currentUserTimeout, setCurrentUserTimeout] = useState(null);
@@ -32,6 +38,10 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
     const isTypingRef = useRef(false);
     const [editingMessageId, setEditingMessageId] = useState(null);
     const [editContent, setEditContent] = useState('');
+    const [isEnhancing, setIsEnhancing] = useState(false);
+    const [isSummarizing, setIsSummarizing] = useState(false);
+    const [summary, setSummary] = useState(null);
+    const [showSummaryOptions, setShowSummaryOptions] = useState(false);
 
     // User Profile Popup State
     const [selectedUser, setSelectedUser] = useState(null);
@@ -559,7 +569,48 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                 });
             }
         }
+
+        // --- SparkHub Chatbot Logic ---
+        if (contentToSend.toLowerCase().includes('@sparkhub')) {
+            console.log("DEBUG: @SparkHub mention detected in:", contentToSend);
+            try {
+                // Case-insensitive replacement
+                const question = contentToSend.replace(/@sparkhub/i, '').trim();
+                console.log("DEBUG: Extracted question:", question);
+
+                if (question) {
+                    console.log("DEBUG: Calling askChatbot AI service...");
+                    const response = await askChatbot(question);
+                    console.log("DEBUG: AI service response:", response);
+
+                    if (response && response.answer) {
+                        console.log("DEBUG: Scheduling AI response emission...");
+                        // Send AI response as a message from the same user after a small delay
+                        setTimeout(() => {
+                            if (socket) {
+                                console.log("DEBUG: Emitting AI response via socket:", response.answer);
+                                if (isDM) {
+                                    socket.emit('SEND_DM', { channelId, content: response.answer });
+                                } else {
+                                    socket.emit('SEND_MESSAGE', { channelId, content: response.answer });
+                                }
+                            } else {
+                                console.warn("DEBUG: Socket not available for AI response");
+                            }
+                        }, 1000);
+                    } else {
+                        console.warn("DEBUG: AI response missing answer field:", response);
+                    }
+                } else {
+                    console.warn("DEBUG: No question found after @SparkHub");
+                }
+            } catch (err) {
+                console.error("DEBUG: Chatbot response failed:", err);
+            }
+        }
+
     };
+
 
     const handleFileSelect = async (e) => {
         const file = e.target.files[0];
@@ -600,8 +651,45 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
     };
 
     const renderMessageContent = (msg) => {
+        const content = msg.content || '';
+
+        // Components for ReactMarkdown to handle styling
+        const MarkdownComponents = {
+            p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+            ul: ({ children }) => <ul className="list-disc ml-4 mb-2">{children}</ul>,
+            ol: ({ children }) => <ol className="list-decimal ml-4 mb-2">{children}</ol>,
+            li: ({ children }) => <li className="mb-1">{children}</li>,
+            h1: ({ children }) => <h1 className="text-xl font-bold mb-2">{children}</h1>,
+            h2: ({ children }) => <h2 className="text-lg font-bold mb-2">{children}</h2>,
+            h3: ({ children }) => <h3 className="text-md font-bold mb-2">{children}</h3>,
+            code: ({ children }) => <code className="bg-gray-100 dark:bg-[#1e1f22] px-1 rounded text-rose-500">{children}</code>,
+            strong: ({ children }) => <strong className="font-bold text-gray-900 dark:text-white">{children}</strong>,
+        };
+
+        // Function to highlight @SparkHub
+        const renderTextWithMentions = (text) => {
+            if (!text) return null;
+            const parts = text.split(/(@SparkHub)/i);
+            return parts.map((part, i) =>
+                part.toLowerCase() === '@sparkhub' ? (
+                    <span key={i} className="bg-indigo-500/20 text-indigo-500 px-1 rounded font-semibold cursor-pointer hover:bg-indigo-500/30 transition-colors">
+                        {part}
+                    </span>
+                ) : (
+                    <span key={i} className="inline markdown-content">
+                        <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={MarkdownComponents}
+                        >
+                            {part}
+                        </ReactMarkdown>
+                    </span>
+                )
+            );
+        };
+
         return (
-            <div>
+            <div className="chat-message-content">
                 {msg.fileUrl && (
                     <div className="mb-2">
                         {msg.fileType === 'IMAGE' ? (
@@ -632,10 +720,13 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                         )}
                     </div>
                 )}
-                <p className="text-gray-800 dark:text-gray-300 whitespace-pre-wrap break-words leading-relaxed">{msg.content}</p>
+                <div className="text-gray-800 dark:text-gray-300 whitespace-pre-wrap break-words leading-relaxed">
+                    {renderTextWithMentions(content)}
+                </div>
             </div>
         );
     };
+
 
     const handleEditMessage = async (messageId) => {
         if (!editContent.trim()) return;
@@ -719,6 +810,38 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
         }, 3000);
     };
 
+    const handleEnhance = async () => {
+        if (!input.trim() || isEnhancing) return;
+
+        try {
+            setIsEnhancing(true);
+            const response = await enhanceMessage(input);
+            if (response.enhanced) {
+                setInput(response.enhanced);
+            }
+        } catch (err) {
+            console.error("Enhancement failed:", err);
+        } finally {
+            setIsEnhancing(false);
+        }
+    };
+
+    const handleSummarize = async (type, value) => {
+        if (isSummarizing) return;
+
+        setIsSummarizing(true);
+        setShowSummaryOptions(false);
+        try {
+            const data = await summarizeChat(channelId, type, value);
+            setSummary(data.summary);
+        } catch (err) {
+            console.error("Summarize error:", err);
+            alert("Failed to summarize chat. Please try again.");
+        } finally {
+            setIsSummarizing(false);
+        }
+    };
+
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     };
@@ -758,7 +881,89 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                         <span className="font-bold text-gray-900 dark:text-gray-100">{channelName || 'channel'}</span>
                     </>
                 )}
+
+                {/* AI Features */}
+                <div className="ml-auto flex items-center gap-2">
+                    <div className="relative">
+                        <button
+                            onClick={() => setShowSummaryOptions(!showSummaryOptions)}
+                            className="p-2 hover:bg-gray-100 dark:hover:bg-white/5 rounded-full text-indigo-500 transition-all flex items-center gap-1 text-xs font-bold uppercase tracking-wider"
+                            title="Summarize Chat"
+                        >
+                            {isSummarizing ? (
+                                <Loader2 className="w-5 h-5 animate-spin" />
+                            ) : (
+                                <FileText className="w-5 h-5" />
+                            )}
+                            <span className="hidden sm:inline">Summarize</span>
+                        </button>
+
+                        {showSummaryOptions && (
+                            <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-[#1e1f22] border border-gray-200 dark:border-white/10 rounded-lg shadow-xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2">
+                                <div className="p-2 text-xs font-bold text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-white/10 px-3">
+                                    Summarize last...
+                                </div>
+                                <button onClick={() => handleSummarize('count', 50)} className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-indigo-500 hover:text-white transition-colors flex items-center gap-2">
+                                    <History className="w-4 h-4" /> 50 Messages
+                                </button>
+                                <button onClick={() => handleSummarize('count', 100)} className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-indigo-500 hover:text-white transition-colors flex items-center gap-2">
+                                    <History className="w-4 h-4" /> 100 Messages
+                                </button>
+                                <button onClick={() => handleSummarize('time', 1)} className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-indigo-500 hover:text-white transition-colors flex items-center gap-2">
+                                    <History className="w-4 h-4" /> 1 Hour
+                                </button>
+                                <button onClick={() => handleSummarize('time', 2)} className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-indigo-500 hover:text-white transition-colors flex items-center gap-2">
+                                    <History className="w-4 h-4" /> 2 Hours
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
             </div>
+
+            {/* Summary Modal overlay */}
+            {summary && (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setSummary(null)}>
+                    <div className="bg-white dark:bg-[#2b2d31] w-full max-w-lg rounded-xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                        <div className="bg-indigo-600 p-4 flex items-center justify-between text-white">
+                            <div className="flex items-center gap-2">
+                                <FileText className="w-5 h-5" />
+                                <h3 className="font-bold">Chat Summary</h3>
+                            </div>
+                            <button onClick={() => setSummary(null)} className="p-1 hover:bg-white/20 rounded-full transition-colors">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="p-6">
+                            <div className="prose dark:prose-invert max-w-none text-gray-700 dark:text-gray-300 text-sm leading-relaxed max-h-96 overflow-y-auto custom-scrollbar">
+                                <ReactMarkdown
+                                    remarkPlugins={[remarkGfm]}
+                                    components={{
+                                        p: ({ children }) => <p className="mb-4 last:mb-0">{children}</p>,
+                                        ul: ({ children }) => <ul className="list-disc ml-4 mb-4">{children}</ul>,
+                                        ol: ({ children }) => <ol className="list-decimal ml-4 mb-4">{children}</ol>,
+                                        li: ({ children }) => <li className="mb-2">{children}</li>,
+                                        h1: ({ children }) => <h1 className="text-xl font-bold mb-3">{children}</h1>,
+                                        h2: ({ children }) => <h2 className="text-lg font-bold mb-3">{children}</h2>,
+                                        h3: ({ children }) => <h3 className="text-md font-bold mb-2">{children}</h3>,
+                                        strong: ({ children }) => <strong className="font-bold text-gray-900 dark:text-white">{children}</strong>,
+                                    }}
+                                >
+                                    {summary}
+                                </ReactMarkdown>
+                            </div>
+                        </div>
+                        <div className="p-4 bg-gray-50 dark:bg-black/20 border-t border-gray-200 dark:border-white/5 flex justify-end">
+                            <button
+                                onClick={() => setSummary(null)}
+                                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold text-sm transition-all shadow-lg shadow-indigo-500/20"
+                            >
+                                Got it
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Messages */}
             <div className="flex-1 overflow-y-auto p-4 flex flex-col-reverse custom-scrollbar">
@@ -946,6 +1151,26 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                             }}
                         />
                         <div className="flex items-center space-x-2 ml-2">
+                            {/* AI Enhance Button */}
+                            {input.trim() && (
+                                <button
+                                    type="button"
+                                    onClick={handleEnhance}
+                                    disabled={isEnhancing}
+                                    className={`p-2 rounded-full transition-all flex items-center justify-center ${isEnhancing
+                                        ? 'bg-indigo-500/20 text-indigo-500 animate-pulse'
+                                        : 'text-indigo-500 hover:bg-indigo-500/10'
+                                        }`}
+                                    title="Enhance with AI"
+                                >
+                                    {isEnhancing ? (
+                                        <Loader2 className="w-5 h-5 animate-spin" />
+                                    ) : (
+                                        <Sparkles className="w-5 h-5" />
+                                    )}
+                                </button>
+                            )}
+
                             {/* Send icon shows when input has text */}
                             <button
                                 type="submit"

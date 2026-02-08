@@ -42,6 +42,8 @@ const DMRouter = require('./routes/dmRoutes');
 app.use('/api/dm', DMRouter);
 const UploadRouter = require('./routes/uploadRoutes');
 app.use('/api/upload', UploadRouter);
+const AiRouter = require('./routes/aiRoutes');
+app.use('/api', AiRouter);
 
 app.get('/', (req, res) => {
   res.json({

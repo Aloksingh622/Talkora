@@ -377,7 +377,7 @@ const MemberList = ({ serverId, channelId }) => {
                 onSuccess={handleActionSuccess}
             />
 
-            <style jsx>{`
+            <style>{`
                 @keyframes scaleIn {
                     from {
                         opacity: 0;
