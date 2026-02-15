@@ -17,8 +17,17 @@ export const getMyServers = async () => {
 };
 
 // Search Servers
-export const searchServers = async (query) => {
-    const response = await axios_Client.get(`/api/servers/search?query=${query}`);
+export const searchServers = async (query, type = null, limit = 10, sort = 'members') => {
+    let url = `/api/servers/search?query=${encodeURIComponent(query)}&limit=${limit}&sort=${sort}`;
+    if (type && type !== 'ALL') {
+        url += `&type=${type}`;
+    }
+    const response = await axios_Client.get(url);
+    return response.data;
+};
+
+export const getPopularServers = async (limit = 10) => {
+    const response = await axios_Client.get(`/api/servers/popular?limit=${limit}`);
     return response.data;
 };
 

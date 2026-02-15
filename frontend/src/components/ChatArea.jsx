@@ -1067,6 +1067,43 @@ const ChatArea = ({ channelId, channelName, serverId }) => {
                     <>
                         <span className="text-2xl text-rose-500 mr-2">#</span>
                         <span className="font-bold text-gray-900 dark:text-gray-100">{channelName || 'channel'}</span>
+                        
+                        {/* AI Summarize Feature for Channels */}
+                        <div className="ml-auto flex items-center gap-2">
+                            <div className="relative">
+                                <button
+                                    onClick={() => setShowSummaryOptions(!showSummaryOptions)}
+                                    className="p-2 hover:bg-gray-100 dark:hover:bg-white/5 rounded-full text-indigo-500 transition-all flex items-center gap-1"
+                                    title="Summarize Chat"
+                                >
+                                    {isSummarizing ? (
+                                        <Loader2 className="w-5 h-5 animate-spin" />
+                                    ) : (
+                                        <FileText className="w-5 h-5" />
+                                    )}
+                                </button>
+
+                                {showSummaryOptions && (
+                                    <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-[#1e1f22] border border-gray-200 dark:border-white/10 rounded-lg shadow-xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2">
+                                        <div className="p-2 text-xs font-bold text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-white/10 px-3">
+                                            Summarize last...
+                                        </div>
+                                        <button onClick={() => handleSummarize('count', 50)} className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-indigo-500 hover:text-white transition-colors flex items-center gap-2">
+                                            <History className="w-4 h-4" /> 50 Messages
+                                        </button>
+                                        <button onClick={() => handleSummarize('count', 100)} className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-indigo-500 hover:text-white transition-colors flex items-center gap-2">
+                                            <History className="w-4 h-4" /> 100 Messages
+                                        </button>
+                                        <button onClick={() => handleSummarize('time', 1)} className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-indigo-500 hover:text-white transition-colors flex items-center gap-2">
+                                            <History className="w-4 h-4" /> 1 Hour
+                                        </button>
+                                        <button onClick={() => handleSummarize('time', 2)} className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-indigo-500 hover:text-white transition-colors flex items-center gap-2">
+                                            <History className="w-4 h-4" /> 2 Hours
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
                     </>
                 )}
             </div>

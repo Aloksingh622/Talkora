@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { createServer, joinServer, searchServers, requestJoinServer } from '../services/serverService';
+import { createServer, joinServer, searchServers, getPopularServers, requestJoinServer } from '../services/serverService';
 import { useNavigate } from 'react-router-dom';
 import { useNotification } from '../context/NotificationContext';
+import { Compass } from 'lucide-react';
 import mainLogo from '../assets/logo.png';
 import ThemeToggle from './ThemeToggle';
 
-const ServerSidebar = ({ onServerSelect, selectedServerId, servers = [], onServerUpdate }) => {
+const ServerSidebar = ({ onServerSelect, selectedServerId, servers = [], onServerUpdate, onDiscoverClick, onHomeClick }) => {
     const navigate = useNavigate();
     const { showNotification } = useNotification();
     const [activeModal, setActiveModal] = useState(null); // 'create-step-1', 'create-step-2', 'join'
@@ -20,6 +21,9 @@ const ServerSidebar = ({ onServerSelect, selectedServerId, servers = [], onServe
     const [searchResults, setSearchResults] = useState([]);
     const [isSearching, setIsSearching] = useState(false);
     const searchTimeoutRef = useRef(null);
+    const [selectedFilter, setSelectedFilter] = useState('ALL'); // Category filter
+    const [popularServers, setPopularServers] = useState([]);
+    const [isLoadingPopular, setIsLoadingPopular] = useState(false);
 
     const handleFileChange = (e) => {
         const file = e.target.files[0];
@@ -114,7 +118,18 @@ const ServerSidebar = ({ onServerSelect, selectedServerId, servers = [], onServe
         setActiveModal(null);
     };
 
-    // Debounced Search
+    // Fetch popular servers when modal opens
+    useEffect(() => {
+        if (activeModal === 'join' && popularServers.length === 0) {
+            setIsLoadingPopular(true);
+            getPopularServers(10)
+                .then(data => setPopularServers(data.servers || []))
+                .catch(err => console.error("Failed to fetch popular servers", err))
+                .finally(() => setIsLoadingPopular(false));
+        }
+    }, [activeModal]);
+
+    // Debounced Search with filters
     useEffect(() => {
         if (activeModal === 'join') {
             if (searchTimeoutRef.current) {
@@ -125,7 +140,12 @@ const ServerSidebar = ({ onServerSelect, selectedServerId, servers = [], onServe
                 setIsSearching(true);
                 searchTimeoutRef.current = setTimeout(async () => {
                     try {
-                        const data = await searchServers(joinSearchQuery);
+                        const data = await searchServers(
+                            joinSearchQuery,
+                            selectedFilter,
+                            20, // Increased limit
+                            'members' // Sort by most popular
+                        );
                         setSearchResults(data.servers || []);
                     } catch (err) {
                         console.error("Search failed", err);
@@ -142,7 +162,7 @@ const ServerSidebar = ({ onServerSelect, selectedServerId, servers = [], onServe
         return () => {
             if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
         };
-    }, [joinSearchQuery, activeModal]);
+    }, [joinSearchQuery, selectedFilter, activeModal]);
 
     const selectServerToJoin = (server) => {
         setJoinServerId(server.id.toString());
@@ -165,7 +185,7 @@ const ServerSidebar = ({ onServerSelect, selectedServerId, servers = [], onServe
             {/* Home / DM Button */}
             <div
                 className="w-12 h-12 rounded-[24px] hover:rounded-[16px] bg-gradient-to-br from-rose-500 to-pink-600 flex items-center justify-center text-white cursor-pointer transition-all duration-300 shadow-lg shadow-rose-500/20 group relative"
-                onClick={() => navigate('/channels/@me')}
+                onClick={onHomeClick ? onHomeClick : () => navigate('/channels/@me')}
             >
                 <img src={mainLogo} alt="Home" className="w-8 h-8 cursor-pointer" />
                 {/* Tooltip */}
@@ -217,16 +237,15 @@ const ServerSidebar = ({ onServerSelect, selectedServerId, servers = [], onServe
                 </div>
             </div>
 
-            {/* Join Server Button */}
+
+            {/* Discover Servers Button */}
             <div
                 className="w-12 h-12 rounded-[24px] hover:rounded-[16px] bg-white dark:bg-[#1e1e24] flex items-center justify-center text-rose-500 cursor-pointer transition-all duration-300 group relative hover:bg-rose-500 hover:text-white"
-                onClick={() => setActiveModal('join')}
+                onClick={onDiscoverClick}
             >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
-                </svg>
+                <Compass className="h-6 w-6" />
                 <div className="absolute left-16 bg-black text-white text-xs font-bold px-3 py-2 rounded-md opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap z-50 pointer-events-none shadow-xl border border-white/10">
-                    Join Server
+                    Discover Servers
                     <div className="absolute top-1/2 -left-1 -mt-1 border-4 border-transparent border-r-black"></div>
                 </div>
             </div>
@@ -358,95 +377,6 @@ const ServerSidebar = ({ onServerSelect, selectedServerId, servers = [], onServe
                                 {isCreating ? 'Creating...' : 'Create'}
                             </button>
                         </div>
-                    </div>
-                </div>
-            )}
-
-            {/* JOIN SERVER MODAL */}
-            {activeModal === 'join' && (
-                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50">
-                    <div className="bg-[#1e1e24] p-6 rounded-2xl w-96 shadow-2xl border border-white/10 relative overflow-hidden">
-                        <div className="absolute top-0 right-0 -mt-10 -mr-10 w-32 h-32 bg-rose-500/20 rounded-full blur-3xl pointer-events-none"></div>
-
-                        <h2 className="text-2xl font-black mb-1 text-white tracking-tight relative z-10">Join a Server</h2>
-                        <p className="text-gray-400 text-sm mb-6 relative z-10">Enter a server name or invitation ID to join.</p>
-
-                        <form onSubmit={handleJoinServer} className="relative z-10">
-                            <div className="mb-6 relative">
-                                <label className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2 block">Server Name / ID</label>
-                                <input
-                                    type="text"
-                                    placeholder="Search for a server..."
-                                    className="w-full p-3 bg-black/50 border border-white/10 rounded-xl text-white focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 transition-all font-medium"
-                                    value={joinSearchQuery}
-                                    onChange={(e) => {
-                                        setJoinSearchQuery(e.target.value);
-                                        setJoinServerId(''); // Reset selected ID if typing
-                                        setSelectedServer(null);
-                                    }}
-                                    autoFocus
-                                />
-
-                                {/* Search Results Dropdown */}
-                                {searchResults.length > 0 && (
-                                    <div className="absolute w-full mt-2 bg-[#2b2d31] border border-white/10 rounded-xl shadow-xl max-h-48 custom-scrollbar z-50 animate-in fade-in zoom-in-95 duration-100 overflow-y-auto">
-                                        {searchResults.map(result => (
-                                            <div
-                                                key={result.id}
-                                                onClick={() => selectServerToJoin(result)}
-                                                className="p-2 hover:bg-rose-500/20 cursor-pointer flex items-center gap-3 transition-colors m-1 rounded-lg"
-                                            >
-                                                {result.icon && !result.icon.includes('ui-avatars') ? (
-                                                    <img src={result.icon} alt={result.name} className="w-8 h-8 rounded-full object-cover" />
-                                                ) : (
-                                                    <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center">
-                                                        <span className="text-xs font-bold text-white">{result.name.substring(0, 2).toUpperCase()}</span>
-                                                    </div>
-                                                )}
-                                                <div className="flex-1 min-w-0">
-                                                    <div className="flex items-center gap-2">
-                                                        <div className="text-white font-bold text-sm truncate">{result.name}</div>
-                                                        {result.isPrivate && (
-                                                            <span className="bg-rose-500/20 text-rose-400 text-[10px] px-1.5 py-0.5 rounded uppercase font-bold tracking-wider">Private</span>
-                                                        )}
-                                                    </div>
-                                                    <div className="text-xs text-gray-400">{result._count.members} Members</div>
-                                                </div>
-                                                {joinServerId === result.id.toString() && (
-                                                    <div className="w-2 h-2 rounded-full bg-green-500"></div>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-
-                                {isSearching && (
-                                    <div className="absolute right-3 top-[38px] text-gray-500">
-                                        <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                        </svg>
-                                    </div>
-                                )}
-                            </div>
-
-                            <div className="flex justify-end gap-3">
-                                <button
-                                    type="button"
-                                    onClick={() => setActiveModal(null)}
-                                    className="px-5 py-2.5 text-gray-300 hover:text-white hover:underline transition-colors font-medium text-sm"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    type="submit"
-                                    disabled={!joinSearchQuery.trim()}
-                                    className={`px-6 py-2.5 rounded-xl font-bold transition-all shadow-lg ${joinSearchQuery.trim() ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-900/20 hover:scale-105' : 'bg-gray-700 text-gray-400 cursor-not-allowed'}`}
-                                >
-                                    {selectedServer?.isPrivate ? 'Request to Join' : 'Join Server'}
-                                </button>
-                            </div>
-                        </form>
                     </div>
                 </div>
             )}

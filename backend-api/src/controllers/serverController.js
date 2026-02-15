@@ -93,26 +93,56 @@ const getMyServers = async (req, res) => {
 
 const searchServers = async (req, res) => {
     try {
-        const { query } = req.query;
-        if (!query || query.trim() === '') {
-            return res.status(400).json({ message: "Search query is required" });
+        const { query, type, limit = 10, sort = 'members' } = req.query;
+        const userId = req.user.id;
+        
+        // Allow empty query if type filter is provided
+        if (!query && !type) {
+            return res.status(400).json({ message: "Search query or type filter is required" });
+        }
+
+        // Base where clause - show all servers
+        const whereClause = {};
+
+        // Add name search if query is provided
+        if (query && query.trim() !== '') {
+            whereClause.name = {
+                contains: query,
+                mode: 'insensitive'
+            };
+        }
+
+        // Add type filter if provided
+        if (type && type !== 'ALL') {
+            whereClause.type = type;
+        }
+
+        // Determine sort order
+        let orderBy = {};
+        switch (sort) {
+            case 'members':
+                orderBy = { members: { _count: 'desc' } };
+                break;
+            case 'name':
+                orderBy = { name: 'asc' };
+                break;
+            case 'recent':
+                orderBy = { createdAt: 'desc' };
+                break;
+            default:
+                orderBy = { members: { _count: 'desc' } };
         }
 
         const servers = await prisma.server.findMany({
-            where: {
-                name: {
-                    contains: query,
-                    mode: 'insensitive'
-                },
-                // Removed isPrivate: false filter to show private servers in search
-            },
-            take: 10,
+            where: whereClause,
+            take: Math.min(parseInt(limit), 50), // Max 50 results
+            orderBy,
             select: {
                 id: true,
                 name: true,
                 icon: true,
                 type: true,
-                isPrivate: true, // Return privacy status
+                isPrivate: true,
                 _count: {
                     select: { members: true }
                 }
@@ -122,6 +152,40 @@ const searchServers = async (req, res) => {
         res.status(200).json({ servers });
     } catch (err) {
         console.error("Search servers error:", err);
+        res.status(500).json({ message: "Internal server error" });
+    }
+};
+
+const getPopularServers = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { limit = 10 } = req.query;
+
+        const servers = await prisma.server.findMany({
+            where: {
+                // Show all servers including joined ones
+            },
+            take: Math.min(parseInt(limit), 20), // Max 20 results
+            orderBy: {
+                members: {
+                    _count: 'desc' // Sort by most members
+                }
+            },
+            select: {
+                id: true,
+                name: true,
+                icon: true,
+                type: true,
+                isPrivate: true,
+                _count: {
+                    select: { members: true }
+                }
+            }
+        });
+
+        res.status(200).json({ servers });
+    } catch (err) {
+        console.error("Get popular servers error:", err);
         res.status(500).json({ message: "Internal server error" });
     }
 };
@@ -768,6 +832,7 @@ module.exports = {
     getMyServers,
     getUserServersProfile,
     searchServers,
+    getPopularServers,
     joinServer,
     leaveServer,
     deleteServer,

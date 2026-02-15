@@ -6,6 +6,7 @@ const {
     getMyServers,
     getUserServersProfile,
     searchServers,
+    getPopularServers,
     joinServer,
     leaveServer,
     deleteServer,
@@ -42,6 +43,7 @@ ServerRouter.post('/', usermiddleware, upload.single('icon'), createServer);
 ServerRouter.get('/', usermiddleware, getMyServers);
 ServerRouter.get('/my-servers', usermiddleware, getUserServersProfile);
 ServerRouter.get('/search', usermiddleware, searchServers);
+ServerRouter.get('/popular', usermiddleware, getPopularServers);
 ServerRouter.post('/:id/join', usermiddleware, joinServer);
 ServerRouter.post('/:id/leave', usermiddleware, leaveServer);
 ServerRouter.delete('/:id', usermiddleware, deleteServer);

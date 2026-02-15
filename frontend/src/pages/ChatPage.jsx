@@ -6,8 +6,9 @@ import ServerSidebar from '../components/ServerSidebar';
 import ChannelList from '../components/ChannelList';
 import ChatArea from '../components/ChatArea';
 import MemberList from '../components/MemberList';
-import DMList from '../components/DMList'; // Import DMList
-import FriendsHome from '../components/FriendsHome'; // Import FriendsHome
+import DMList from '../components/DMList';
+import FriendsHome from '../components/FriendsHome';
+import ServerDiscovery from './ServerDiscovery';
 import { initSocket, disconnectSocket, getSocket } from '../utils/socket';
 import { useNotification } from '../context/NotificationContext';
 import sparkHubLogo from '../assets/sparkhub.png';
@@ -25,6 +26,7 @@ const ChatPage = () => {
     const [currentServer, setCurrentServerLocal] = useState(null);
     const { showNotification } = useNotification();
     const [activeVoiceChannel, setActiveVoiceChannel] = useState(null);
+    const [showDiscovery, setShowDiscovery] = useState(false);
 
     useEffect(() => {
         initSocket();
@@ -75,7 +77,14 @@ const ChatPage = () => {
         dispatch(setCurrentChannel(channelId ? parseInt(channelId) : null));
     }, [channelId, dispatch]);
 
-    const handleServerSelect = (id) => navigate(`/channels/${id}`);
+    const handleServerSelect = (id) => {
+        navigate(`/channels/${id}`);
+        setShowDiscovery(false);
+    };
+    const handleHomeClick = () => {
+        navigate('/channels/@me');
+        setShowDiscovery(false);
+    };
     const handleChannelSelect = (id) => navigate(`/channels/${serverId}/${id}`);
     const handleServerUpdate = () => dispatch(fetchMyServers());
 
@@ -95,32 +104,40 @@ const ChatPage = () => {
                 selectedServerId={serverId ? (serverId === '@me' ? null : parseInt(serverId)) : null}
                 servers={servers}
                 onServerUpdate={handleServerUpdate}
+                onDiscoverClick={() => setShowDiscovery(true)}
+                onHomeClick={handleHomeClick}
             />
 
             {/* CHANNEL LIST OR DM LIST */}
-            {serverId === '@me' ? (
-                <DMList selectedChannelId={channelId} />
-            ) : serverId ? (
-                <ChannelList
-                    serverId={serverId}
-                    server={currentServer}
-                    onChannelSelect={handleChannelSelect}
-                    selectedChannelId={channelId ? parseInt(channelId) : null}
-                    onServerUpdate={handleServerUpdate}
-                    onVoiceSelect={handleVoiceSelect}
-                    activeVoiceChannelId={activeVoiceChannel?.id}
-                    onChannelNameChange={setChannelName}
-                />
-            ) : (
-                <div className="hidden md:block w-72 bg-[#F9FAFB] dark:bg-[#111116] border-r border-gray-200 dark:border-white/5 h-full relative overflow-hidden">
-                    {/* Skeleton / Empty Graphics for Channel List */}
-                    <div className="absolute inset-0 opacity-10 dark:opacity-5 pointer-events-none bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-rose-500 via-transparent to-transparent"></div>
-                </div>
+            {!showDiscovery && (
+                <>
+                    {serverId === '@me' ? (
+                        <DMList selectedChannelId={channelId} />
+                    ) : serverId ? (
+                        <ChannelList
+                            serverId={serverId}
+                            server={currentServer}
+                            onChannelSelect={handleChannelSelect}
+                            selectedChannelId={channelId ? parseInt(channelId) : null}
+                            onServerUpdate={handleServerUpdate}
+                            onVoiceSelect={handleVoiceSelect}
+                            activeVoiceChannelId={activeVoiceChannel?.id}
+                            onChannelNameChange={setChannelName}
+                        />
+                    ) : (
+                        <div className="hidden md:block w-72 bg-[#F9FAFB] dark:bg-[#111116] border-r border-gray-200 dark:border-white/5 h-full relative overflow-hidden">
+                            <div className="absolute inset-0 opacity-10 dark:opacity-5 pointer-events-none bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-rose-500 via-transparent to-transparent"></div>
+                        </div>
+                    )}
+                </>
             )}
 
             {/* MAIN CONTENT AREA */}
             <div className="flex-1 flex relative overflow-hidden">
-                {serverId === '@me' && !channelId ? (
+                {showDiscovery ? (
+                    /* DISCOVERY VIEW */
+                    <ServerDiscovery onBack={() => setShowDiscovery(false)} />
+                ) : serverId === '@me' && !channelId ? (
                     /* FRIENDS HOME VIEW */
                     <FriendsHome />
                 ) : activeVoiceChannel ? (
